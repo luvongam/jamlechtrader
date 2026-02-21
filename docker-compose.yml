@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: .
+      target: app
+    env_file: .env
+    volumes:
+      - ./data_cache:/app/data_cache:z
+      - ./output:/app/output:z
+      - ./logs:/app/logs:z
+
+  backtest:
+    build:
+      context: .
+      target: app
+    entrypoint: ["jamlechtrader", "backtest"]
+    env_file: .env
+    volumes:
+      - ./data_cache:/app/data_cache:z
+      - ./output:/app/output:z
+      - ./logs:/app/logs:z
+
+  test:
+    build:
+      context: .
+      target: test
+    env_file: .env

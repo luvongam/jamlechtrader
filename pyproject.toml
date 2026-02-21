@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jamlechtrader"
+version = "0.1.0"
+description = "Production-grade quantitative trading platform powered by MetaTrader 5"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "click>=8.0",
+    "python-dotenv>=1.0",
+    "loguru>=0.7",
+    "pyarrow>=12.0",
+    "requests>=2.31",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+]
+
+[project.optional-dependencies]
+mt5 = [
+    "MetaTrader5>=5.0.45; sys_platform == 'win32'",
+]
+indicators = []
+reports = [
+    "quantstats>=0.0.62",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.scripts]
+jamlechtrader = "jamlechtrader.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jamlechtrader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
