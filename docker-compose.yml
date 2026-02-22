@@ -1,27 +1,173 @@
+version: '3.8'
+
 services:
-  app:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: jamlechtrader-db
+    command: ["postgres", "-p", "5436"]
+    environment:
+      POSTGRES_DB: jamlechtrader
+      POSTGRES_USER: jamlechtrader
+      POSTGRES_PASSWORD: jamlechtrader
+    ports:
+      - "${POSTGRES_HOST_PORT:-5436}:5436"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jamlechtrader -p 5436"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jamlechtrader-network
+
+  # Run database migrations
+  migrations:
     build:
       context: .
-      target: app
-    env_file: .env
-    volumes:
-      - ./data_cache:/app/data_cache:z
-      - ./output:/app/output:z
-      - ./logs:/app/logs:z
+      dockerfile: Dockerfile
+    container_name: jamlechtrader-migrations
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jamlechtrader:jamlechtrader@postgres:5436/jamlechtrader
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - jamlechtrader-network
 
+  # Backtest service
   backtest:
     build:
       context: .
-      target: app
-    entrypoint: ["jamlechtrader", "backtest"]
-    env_file: .env
+      dockerfile: Dockerfile
+    container_name: jamlechtrader-backtest
+    command: >
+      jamlechtrader backtest
+      --strategy sma_crossover
+      --symbol EURUSD
+      --timeframe H1
+      --start 2024-01-01
+      --end 2024-12-31
+      --cash 10000
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jamlechtrader:jamlechtrader@postgres:5436/jamlechtrader
+      DEFAULT_SYMBOL: EURUSD
+      DEFAULT_TIMEFRAME: H1
+      DEFAULT_LOT_SIZE: 0.01
+      DATA_DIR: /app/data_cache
     volumes:
-      - ./data_cache:/app/data_cache:z
-      - ./output:/app/output:z
-      - ./logs:/app/logs:z
+      - ./data_cache:/app/data_cache
+      - ./.env:/app/.env:ro
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    networks:
+      - jamlechtrader-network
+    profiles:
+      - backtest
 
-  test:
+  # Paper trading service
+  paper:
     build:
       context: .
-      target: test
-    env_file: .env
+      dockerfile: Dockerfile
+    container_name: jamlechtrader-paper
+    command: >
+      jamlechtrader paper
+      --strategy mean_reversion
+      --symbol EURUSD
+      --timeframe M5
+      --duration 3600
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jamlechtrader:jamlechtrader@postgres:5436/jamlechtrader
+      MT5_PATH: ${MT5_PATH}
+      MT5_LOGIN: ${MT5_LOGIN}
+      MT5_PASSWORD: ${MT5_PASSWORD}
+      MT5_SERVER: ${MT5_SERVER}
+      DEFAULT_SYMBOL: EURUSD
+      DEFAULT_TIMEFRAME: M5
+      DEFAULT_LOT_SIZE: 0.01
+    volumes:
+      - ./data_cache:/app/data_cache
+      - ./.env:/app/.env:ro
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    networks:
+      - jamlechtrader-network
+    profiles:
+      - paper
+
+  # Monitoring Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jamlechtrader-dashboard
+    command: jamlechtrader dashboard --host 0.0.0.0 --port 8050
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jamlechtrader:jamlechtrader@postgres:5436/jamlechtrader
+      DASHBOARD_PORT: 8050
+    ports:
+      - "8050:8050"
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    networks:
+      - jamlechtrader-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - monitoring
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: jamlechtrader-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./devops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - jamlechtrader-network
+    profiles:
+      - monitoring
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: jamlechtrader-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./devops/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./devops/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - jamlechtrader-network
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  jamlechtrader-network:
+    driver: bridge

@@ -31,3 +31,15 @@ class StrategyError(JamlechTraderError):
 
 class ValidationError(JamlechTraderError):
     """Data validation error."""
+
+
+class InvalidTransitionError(JamlechTraderError):
+    """Invalid order state transition."""
+
+
+class OrderNotFoundError(JamlechTraderError):
+    """Order not found in the OMS."""
+
+
+class AmendmentError(JamlechTraderError):
+    """Order amendment failure."""

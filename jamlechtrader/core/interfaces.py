@@ -44,6 +44,10 @@ class ExecutionHandler(ABC):
     def execute_order(self, order: OrderEvent) -> FillEvent | None:
         """Execute an order and return a fill, or None if rejected."""
 
+    async def execute_order_async(self, order: OrderEvent) -> FillEvent | None:
+        """Async execution — defaults to delegating to the sync version."""
+        return self.execute_order(order)
+
 
 class RiskManager(ABC):
     """Validates orders against risk rules before execution."""

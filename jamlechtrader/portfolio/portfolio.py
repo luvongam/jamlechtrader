@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -10,11 +11,27 @@ from jamlechtrader.core.enums import OrderSide
 from jamlechtrader.core.events import FillEvent, OrderEvent, SignalEvent
 from jamlechtrader.core.models import Position, PortfolioSnapshot
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from jamlechtrader.audit.logger import AuditLogger
+    from jamlechtrader.db.repositories import (
+        ClosedTradeRepository,
+        FillRepository,
+        PositionRepository,
+        SnapshotRepository,
+    )
+
 
 class Portfolio:
     """Tracks open positions, cash balance, and performance."""
 
-    def __init__(self, initial_cash: float = 10_000.0) -> None:
+    def __init__(
+        self,
+        initial_cash: float = 10_000.0,
+        db_session: AsyncSession | None = None,
+        audit_logger: AuditLogger | None = None,
+    ) -> None:
         self.initial_cash = initial_cash
         self.cash = initial_cash
         self.positions: dict[str, Position] = {}  # symbol → Position
@@ -22,6 +39,8 @@ class Portfolio:
         self.equity_curve: list[PortfolioSnapshot] = []
         self._peak_equity = initial_cash
         self.realized_pnl = 0.0
+        self._db_session = db_session
+        self._audit_logger = audit_logger
 
     @property
     def equity(self) -> float:
@@ -143,6 +162,91 @@ class Portfolio:
             return (exit_price - position.entry_price) * position.quantity
         else:
             return (position.entry_price - exit_price) * position.quantity
+
+    async def on_fill_async(self, fill: FillEvent, correlation_id: str | None = None) -> None:
+        """Async version of on_fill that persists to DB and writes audit entries."""
+        self.on_fill(fill)
+
+        if self._db_session is not None:
+            from jamlechtrader.db.repositories import (
+                ClosedTradeRepository,
+                FillRepository,
+                PositionRepository,
+            )
+
+            fill_repo = FillRepository(self._db_session)
+            await fill_repo.create(
+                order_id=fill.order_id,
+                symbol=fill.symbol,
+                side=fill.side.value,
+                quantity=fill.quantity,
+                price=fill.price,
+                commission=fill.commission,
+                slippage=fill.slippage,
+            )
+
+            pos_repo = PositionRepository(self._db_session)
+            if fill.symbol in self.positions:
+                pos = self.positions[fill.symbol]
+                await pos_repo.upsert(
+                    symbol=fill.symbol,
+                    side=pos.side.value,
+                    quantity=pos.quantity,
+                    entry_price=pos.entry_price,
+                    current_price=pos.current_price,
+                    unrealized_pnl=pos.unrealized_pnl,
+                )
+            else:
+                await pos_repo.delete(fill.symbol)
+                if self.closed_trades:
+                    last_trade = self.closed_trades[-1]
+                    if last_trade["symbol"] == fill.symbol:
+                        trade_repo = ClosedTradeRepository(self._db_session)
+                        duration = None
+                        if last_trade.get("entry_time") and last_trade.get("exit_time"):
+                            duration = (
+                                last_trade["exit_time"] - last_trade["entry_time"]
+                            ).total_seconds()
+                        await trade_repo.create(
+                            symbol=last_trade["symbol"],
+                            side=last_trade["side"],
+                            quantity=last_trade["quantity"],
+                            entry_price=last_trade["entry_price"],
+                            exit_price=last_trade["exit_price"],
+                            pnl=last_trade["pnl"],
+                            commission=last_trade.get("commission", 0.0),
+                            entry_time=last_trade.get("entry_time"),
+                            exit_time=last_trade.get("exit_time"),
+                            duration_seconds=duration,
+                        )
+
+            await self._db_session.commit()
+
+        if self._audit_logger and correlation_id:
+            fill_data = {
+                "symbol": fill.symbol,
+                "side": fill.side.value,
+                "quantity": fill.quantity,
+                "price": fill.price,
+                "commission": fill.commission,
+            }
+            await self._audit_logger.log_fill_received(correlation_id, fill_data)
+
+            if fill.symbol not in self.positions and self.closed_trades:
+                last_trade = self.closed_trades[-1]
+                if last_trade["symbol"] == fill.symbol:
+                    await self._audit_logger.log_position_closed(correlation_id, last_trade)
+            elif fill.symbol in self.positions:
+                pos = self.positions[fill.symbol]
+                await self._audit_logger.log_position_opened(
+                    correlation_id,
+                    {
+                        "symbol": pos.symbol,
+                        "side": pos.side.value,
+                        "quantity": pos.quantity,
+                        "entry_price": pos.entry_price,
+                    },
+                )
 
     def reset(self) -> None:
         self.cash = self.initial_cash

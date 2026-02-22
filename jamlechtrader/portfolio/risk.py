@@ -113,3 +113,20 @@ class RiskManager:
     def is_halted(self) -> bool:
         """Check if trading is halted."""
         return self._halted
+
+
+def create_risk_manager(enterprise: bool = False, **kwargs) -> RiskManager:
+    """Factory function to create either a basic or enterprise risk manager.
+
+    When ``enterprise=True``, returns an ``EnterpriseRiskManager`` with
+    ``EnterpriseRiskLimits``; otherwise returns the standard ``RiskManager``.
+    """
+    if enterprise:
+        from jamlechtrader.portfolio.enterprise_risk import (
+            EnterpriseRiskLimits,
+            EnterpriseRiskManager,
+        )
+
+        limits = EnterpriseRiskLimits(**{k: v for k, v in kwargs.items() if v is not None})
+        return EnterpriseRiskManager(limits=limits)
+    return RiskManager(limits=RiskLimits(**{k: v for k, v in kwargs.items() if v is not None}))

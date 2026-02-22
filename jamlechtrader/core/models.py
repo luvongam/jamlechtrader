@@ -51,6 +51,8 @@ class Order(BaseModel):
     status: OrderStatus = OrderStatus.PENDING
     timestamp: datetime = Field(default_factory=_utcnow)
     comment: str = ""
+    client_order_id: str = ""
+    tags: dict[str, str] = Field(default_factory=dict)
 
 
 class Fill(BaseModel):

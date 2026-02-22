@@ -1,0 +1,372 @@
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ JamlechTrader Enterprise Upgrade Plan
+
+ Context
+
+ JamlechTrader is a ~5,700 LOC Python algorithmic trading platform with MT5 integration, 8 strategies
+ (including advanced SMC), backtesting, paper trading, and live trading. While well-architected with
+ clean separation of concerns (event-driven, Pydantic v2, pluggable components), it lacks
+ enterprise-grade infrastructure: no database persistence (all in-memory), no fault tolerance (MT5
+ disconnection = crash), no audit trail, plaintext credentials, synchronous-only architecture, basic
+ risk controls, no order lifecycle management, and no monitoring/observability.
+
+ This plan upgrades the platform to institutional trading standards across 7 phases, adding ~6,100 LOC
+ in 46 new files while modifying 24 existing files.
+
+ Decisions made:
+ - PostgreSQL via SQLAlchemy async for persistence
+ - All 7 phases implemented
+ - New async engines alongside existing sync ones (no breaking changes)
+ - Audit logging (not regulatory-specific compliance formatting)
+
+ ---
+ Phase 1: Database + Audit Trail + Security (~1,220 LOC)
+
+ New package: jamlechtrader/db/
+
+ db/engine.py (~60 LOC)
+ - create_async_engine() with connection pool (pool_size=10, max_overflow=20, pool_pre_ping=True)
+ - create_session_factory() returning async_sessionmaker[AsyncSession]
+ - Base declarative base class
+
+ db/models.py (~250 LOC)
+ SQLAlchemy ORM models for 6 tables:
+ - orders — full order lifecycle (UUID PK, client_order_id, symbol, side, type, qty, price, SL/TP, TIF,
+  status, broker_order_id, strategy_name, timestamps)
+ - fills — one row per execution fill, FK to orders (supports partial fills)
+ - positions — current open positions (mutable, updated on fills)
+ - portfolio_snapshots — periodic equity curve points with JSONB positions
+ - audit_log — APPEND-ONLY immutable event store (event_type, event_data JSONB, correlation_id UUID,
+ source, timestamp). No UPDATE/DELETE allowed.
+ - closed_trades — finalized trade records with entry/exit prices, PnL, duration
+
+ db/repositories.py (~200 LOC)
+ Repository pattern: OrderRepository, FillRepository, PositionRepository, AuditLogRepository,
+ SnapshotRepository — all async methods
+
+ db/state_recovery.py (~100 LOC)
+ - StateRecovery.recover_portfolio() — load open positions + last snapshot from DB after crash
+ - StateRecovery.recover_open_orders() — load SUBMITTED/PARTIALLY_FILLED orders for reconciliation
+ - StateRecovery.save_state() — persist full portfolio state
+
+ db/__init__.py — exports
+
+ New package: jamlechtrader/audit/
+
+ audit/logger.py (~100 LOC)
+ - AuditLogger class wrapping AuditLogRepository
+ - Methods: log_order_created, log_order_submitted, log_fill_received, log_risk_rejected,
+ log_position_opened, log_position_closed, log_system_event
+ - Every method takes a correlation_id (UUID) linking the entire order lifecycle
+
+ New package: jamlechtrader/security/
+
+ security/credentials.py (~120 LOC)
+ - CredentialManager using cryptography.Fernet + keyring
+ - encrypt(), decrypt(), store_credential(), get_credential()
+ - Encryption key stored in OS keyring, not in files
+
+ Alembic migrations
+
+ - alembic/ directory with env.py pointing to db.models.Base.metadata
+ - Initial migration creating all 6 tables + indexes on audit_log(correlation_id) and
+ audit_log(event_type, timestamp)
+
+ Modifications to existing files
+
+ config/settings.py — add database_url: str, use_secure_credentials: bool
+ portfolio/portfolio.py — add optional db_session and audit_logger params; add on_fill_async() that
+ persists fills + audit entries while keeping sync on_fill() for backtest compatibility
+ engine/live.py — inject DB session + audit logger around main loop
+ docker-compose.yml — add PostgreSQL service with health check
+ pyproject.toml — add dependencies: sqlalchemy[asyncio]>=2.0, asyncpg>=0.29, alembic>=1.13,
+ cryptography>=42.0, keyring>=25.0
+
+ ---
+ Phase 2: Resilience & Fault Tolerance (~650 LOC)
+
+ New package: jamlechtrader/resilience/
+
+ resilience/circuit_breaker.py (~120 LOC)
+ - CircuitBreaker with states: CLOSED → OPEN → HALF_OPEN
+ - Configurable: failure_threshold=5, recovery_timeout=30s, half_open_max_calls=1
+ - Decorator usage: @circuit_breaker
+
+ resilience/retry.py (~80 LOC)
+ - Pre-configured decorators using tenacity:
+   - mt5_retry — 5 attempts, exponential backoff 1-30s
+   - order_retry — 3 attempts, exponential backoff 0.5-10s
+
+ resilience/health_monitor.py (~150 LOC)
+ - ConnectionHealthMonitor — background thread polling MT5 connection every 5s
+ - Auto-reconnect on failure with circuit breaker integration
+ - Callbacks: on_disconnect, on_reconnect
+
+ resilience/shutdown.py (~100 LOC)
+ - GracefulShutdown — handles SIGINT/SIGTERM
+ - Runs shutdown callbacks in order: save state → close positions (optional) → close connections →
+ flush logs
+
+ resilience/dead_letter_queue.py (~80 LOC)
+ - DeadLetterQueue — stores failed orders for retry/review
+ - add(), peek(), retry(), discard(), optional DB persistence
+
+ Modifications to existing files
+
+ mt5/connection.py — wrap connect() with @mt5_retry, add reconnect() method, integrate CircuitBreaker
+ mt5/executor.py — wrap send_order() and close_position() with circuit breaker + retry
+ engine/live.py — integrate GracefulShutdown + ConnectionHealthMonitor + dead letter queue
+ pyproject.toml — add tenacity>=8.2
+
+ ---
+ Phase 3: Async Architecture (~660 LOC)
+
+ New files
+
+ core/async_events.py (~100 LOC)
+ - AsyncEventBus using asyncio.Queue
+ - subscribe(), publish(), process_events() — all async
+ - Handlers are coroutines dispatched via asyncio.gather()
+
+ core/event_router.py (~80 LOC)
+ - EventRouter — routes events to symbol-specific or type-specific queues
+
+ mt5/async_wrapper.py (~120 LOC)
+ - AsyncMT5 — wraps sync MT5 calls via ThreadPoolExecutor (4 workers)
+ - connect(), get_latest_bars(), send_order(), get_current_tick(), close_position() — all async
+
+ engine/async_live.py (~200 LOC)
+ - AsyncLiveEngine — new engine (existing LiveEngine untouched)
+ - Runs concurrent asyncio.create_task() for: event processing, market data polling, health monitoring
+ - Integrates: AsyncEventBus, AsyncMT5, DB session, audit logger, resilience components
+
+ data/websocket_feed.py (~100 LOC)
+ - WebSocketFeed — receive real-time market data via WebSocket
+ - Publishes MarketEvents to AsyncEventBus
+
+ Modifications to existing files
+
+ core/interfaces.py — add async execute_order_async() default method delegating to sync version
+ cli/main.py — add async-live command using asyncio.run(AsyncLiveEngine.run())
+ pyproject.toml — add websockets>=12.0
+
+ ---
+ Phase 4: Enterprise Risk Management (~780 LOC)
+
+ New files
+
+ portfolio/enterprise_risk.py (~350 LOC)
+ - EnterpriseRiskLimits dataclass extending current limits with:
+   - Per-symbol position limits (dict[str, float])
+   - Per-symbol notional limits
+   - Max total notional, max leverage ratio, max margin utilization %
+   - VaR confidence level and max VaR %
+   - Kill switch thresholds (drawdown %, loss amount, consecutive losses)
+ - EnterpriseRiskManager with ordered check pipeline:
+   a. _check_daily_drawdown
+   b. _check_position_limits
+   c. _check_per_symbol_limits
+   d. _check_notional_limits
+   e. _check_margin_requirements
+   f. _check_leverage_ratio
+   g. _check_var_limit
+   h. _check_kill_switch
+ - Each check returns the order (pass) or None (reject) with audit logging
+
+ portfolio/pnl_monitor.py (~150 LOC)
+ - PnLMonitor — real-time P&L monitoring with configurable thresholds
+ - Alert levels: warning (-2%), critical (-5%), profit_target (+3%)
+ - Integrates with NotificationManager for alerts
+
+ portfolio/kill_switch.py (~120 LOC)
+ - KillSwitch — emergency trading halt
+ - trigger(reason) — halt + optionally close all positions
+ - close_all_positions() — emergency liquidation
+ - reset(authorization_code) — requires authorization to reactivate
+
+ portfolio/var.py (~100 LOC)
+ - VaRCalculator — Value-at-Risk using historical simulation, parametric (Gaussian), and CVaR (Expected
+  Shortfall)
+ - portfolio_var() — portfolio-level VaR considering correlations
+
+ Modifications to existing files
+
+ portfolio/risk.py — add create_risk_manager(enterprise=False) factory function
+ config/settings.py — add enterprise risk settings fields
+ core/constants.py — add enterprise risk constants
+ pyproject.toml — add scipy>=1.11
+
+ ---
+ Phase 5: Order Management System (~910 LOC)
+
+ New package: jamlechtrader/oms/
+
+ oms/state_machine.py (~180 LOC)
+ - VALID_TRANSITIONS dict defining legal state changes:
+   - PENDING → SUBMITTED, REJECTED
+   - SUBMITTED → PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED
+   - PARTIALLY_FILLED → PARTIALLY_FILLED, FILLED, CANCELLED
+   - FILLED, CANCELLED, REJECTED, EXPIRED → terminal (no transitions)
+ - OrderStateMachine — enforces transitions, logs history, fires callbacks on transition
+
+ oms/managed_order.py (~200 LOC)
+ - ManagedOrder — wraps Order with:
+   - Auto-generated client_order_id (format: JT-{uuid12})
+   - State machine integration
+   - Partial fill tracking: filled_quantity, remaining_quantity, average_fill_price
+   - Tags dict for metadata
+   - Methods: submit(), on_fill(), cancel(), reject(reason)
+
+ oms/bracket_order.py (~150 LOC)
+ - BracketOrder — atomic group: entry + stop loss + take profit
+ - States: pending → active (entry filled) → closed (SL or TP filled)
+ - When SL fills → cancel TP; when TP fills → cancel SL
+ - BracketOrderManager for lifecycle management
+
+ oms/amendment.py (~100 LOC)
+ - OrderAmendment dataclass (new price, quantity, SL, TP)
+ - OrderAmendmentHandler — cancel-replace pattern implementation
+
+ oms/order_manager.py (~200 LOC)
+ - OrderManager — central OMS facade
+ - submit_order(), submit_bracket(), cancel_order(), amend_order()
+ - get_order(), get_open_orders(), get_order_history()
+ - Integrates: executor, portfolio, risk manager, audit logger, DB session
+
+ Modifications to existing files
+
+ core/models.py — add client_order_id: str and tags: dict[str, str] to Order
+ core/exceptions.py — add InvalidTransitionError, OrderNotFoundError, AmendmentError
+ engine/live.py — replace direct executor.execute_order() with order_manager.submit_order()
+ engine/async_live.py — same OMS integration
+
+ ---
+ Phase 6: Monitoring & Observability (~660 LOC)
+
+ New package: jamlechtrader/monitoring/
+
+ monitoring/metrics.py (~150 LOC)
+ - TradingMetrics class with Prometheus metrics:
+   - Counters: orders_submitted, orders_filled, orders_rejected, mt5_reconnects
+   - Gauges: equity, cash, unrealized_pnl, realized_pnl, open_positions, drawdown_pct,
+ position_quantity (per symbol), mt5_connected
+   - Histograms: order_latency (buckets 10ms-5s), fill_slippage (0-10 pips)
+ - update_portfolio(), record_fill() helper methods
+
+ monitoring/health.py (~80 LOC)
+ - HealthChecker — checks MT5 connection, database, engine status
+ - Returns HealthCheckResult with status (healthy/degraded/unhealthy), component details, uptime
+
+ monitoring/correlation.py (~50 LOC)
+ - contextvars.ContextVar for correlation ID propagation
+ - new_correlation_id(), get_correlation_id()
+
+ monitoring/alerting.py (~120 LOC)
+ - AlertManager with pluggable channels: SlackAlertChannel, PagerDutyAlertChannel, WebhookAlertChannel
+ - AlertRule dataclass with condition function, severity, message template
+ - Alert suppression window (5 min default) to prevent spam
+
+ monitoring/dashboard.py (~200 LOC)
+ - FastAPI app with endpoints:
+   - GET /health — health check
+   - GET /metrics — Prometheus metrics
+   - GET /api/portfolio — current portfolio state
+   - GET /api/orders — open/recent orders
+   - GET /api/positions — current positions
+   - WS /ws/live — WebSocket real-time updates
+   - GET / — dashboard HTML page
+
+ Modifications to existing files
+
+ config/logging_config.py — add correlation ID to loguru format
+ cli/main.py — add dashboard command (launches uvicorn)
+ pyproject.toml — add prometheus-client>=0.20, httpx>=0.27
+
+ ---
+ Phase 7: Testing & Quality (~1,230 LOC)
+
+ New test files
+
+ tests/mt5_mock_enhanced.py (~200 LOC)
+ - MT5MockServer — full MT5 mock with configurable failures, latency injection, partial fill simulation
+
+ tests/factories.py (~80 LOC)
+ - factory-boy factories: BarFactory, OrderFactory, FillFactory, PositionFactory
+
+ tests/test_integration_live_engine.py (~200 LOC)
+ - Full trade lifecycle, connection failure + recovery, risk rejection, partial fills, graceful
+ shutdown, state recovery
+
+ tests/test_integration_oms.py (~150 LOC)
+ - Order state machine lifecycle, bracket orders (SL/TP fill + cancel), partial fills, cancel-replace,
+ dead letter queue
+
+ tests/test_chaos.py (~150 LOC)
+ - Random MT5 disconnections, data gaps, reconnect storms, order timeouts, circuit breaker
+ open/recover, kill switch under rapid drawdown
+
+ tests/test_performance.py (~100 LOC)
+ - Benchmarks: event bus throughput, risk check latency, portfolio on_fill latency, backtest 1000 bars,
+  VaR calculation speed
+
+ tests/test_property_based.py (~150 LOC)
+ - Hypothesis tests: equity conservation, order state machine invariants, position sizer bounds, VaR
+ positivity
+
+ tests/test_strategy_regression.py (~120 LOC)
+ - Known-output tests for each strategy on fixed data, parameterized "runs without error" and "produces
+  valid signals" for all strategies
+
+ Modifications to existing files
+
+ tests/conftest.py — add fixtures for async DB sessions (SQLite in-memory for tests), enhanced MT5
+ mock, factories
+ pyproject.toml — add dev deps: hypothesis>=6.90, pytest-asyncio>=0.23, pytest-benchmark>=4.0,
+ pytest-timeout>=2.2, aiosqlite>=0.20, factory-boy>=3.3, respx>=0.21
+
+ ---
+ Verification Plan
+
+ After each phase, verify:
+
+ 1. Phase 1: alembic upgrade head creates tables; run backtest to confirm backward compat; insert/query
+  audit log entries
+ 2. Phase 2: Kill MT5 mid-session → auto-reconnect; 5 failures → circuit breaker opens; SIGTERM →
+ graceful state save
+ 3. Phase 3: jamlechtrader async-live runs; concurrent multi-symbol via asyncio; WebSocket feed
+ connects
+ 4. Phase 4: Order exceeding per-symbol limit → rejected with audit; drawdown hits kill switch →
+ trading halts; VaR calculated
+ 5. Phase 5: Submit order → track through SUBMITTED → PARTIALLY_FILLED → FILLED; bracket SL fill → TP
+ cancelled
+ 6. Phase 6: GET /metrics returns Prometheus format; GET /health returns status; WebSocket streams live
+  PnL
+ 7. Phase 7: pytest tests/ -v all green; pytest --benchmark shows latency numbers; Hypothesis finds no
+ invariant violations
+
+ Full end-to-end test: Run backtest with enterprise risk + OMS + audit logging → verify trades in DB,
+ audit log complete, metrics exported, tearsheet generated.
+
+ ---
+ Summary
+
+ ┌───────┬──────────────────────────────┬───────────┬──────────┬────────┐
+ │ Phase │            Focus             │ New Files │ Modified │  LOC   │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ 1     │ Database + Audit + Security  │ 12        │ 5        │ ~1,220 │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ 2     │ Resilience & Fault Tolerance │ 6         │ 4        │ ~650   │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ 3     │ Async Architecture           │ 5         │ 3        │ ~660   │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ 4     │ Enterprise Risk Management   │ 4         │ 3        │ ~780   │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ 5     │ Order Management System      │ 6         │ 4        │ ~910   │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ 6     │ Monitoring & Observability   │ 6         │ 3        │ ~660   │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ 7     │ Testing & Quality            │ 7         │ 2        │ ~1,230 │
+ ├───────┼──────────────────────────────┼───────────┼──────────┼────────┤
+ │ Total │                              │ 46        │ 24       │ ~6,110 │
+ └───────┴──────────────────────────────┴───────────┴──────────┴────────┘
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌

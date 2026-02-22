@@ -107,21 +107,24 @@ class TestRiskManager:
         )
 
     def test_order_passes(self):
-        rm = RiskManager(max_position_size=1.0, max_open_positions=5)
+        from jamlechtrader.portfolio.risk import RiskLimits
+        rm = RiskManager(limits=RiskLimits(max_position_size=1.0, max_open_positions=5))
         order = OrderEvent(symbol="EURUSD", side=OrderSide.BUY, quantity=0.01)
         snap = self._make_snapshot()
         result = rm.check_order(order, snap)
         assert result is not None
 
     def test_max_positions_blocks(self):
-        rm = RiskManager(max_open_positions=2)
+        from jamlechtrader.portfolio.risk import RiskLimits
+        rm = RiskManager(limits=RiskLimits(max_open_positions=2))
         order = OrderEvent(symbol="NEWPAIR", side=OrderSide.BUY, quantity=0.01)
         snap = self._make_snapshot(n_positions=2)
         result = rm.check_order(order, snap)
         assert result is None
 
     def test_clamps_oversize(self):
-        rm = RiskManager(max_position_size=0.5)
+        from jamlechtrader.portfolio.risk import RiskLimits
+        rm = RiskManager(limits=RiskLimits(max_position_size=0.5))
         order = OrderEvent(symbol="EURUSD", side=OrderSide.BUY, quantity=1.0)
         snap = self._make_snapshot()
         result = rm.check_order(order, snap)
@@ -129,7 +132,8 @@ class TestRiskManager:
         assert result.quantity == 0.5
 
     def test_daily_drawdown_halt(self):
-        rm = RiskManager(max_daily_drawdown_pct=5.0)
+        from jamlechtrader.portfolio.risk import RiskLimits
+        rm = RiskManager(limits=RiskLimits(max_daily_drawdown_pct=5.0))
         order = OrderEvent(symbol="EURUSD", side=OrderSide.BUY, quantity=0.01)
 
         # First call sets baseline

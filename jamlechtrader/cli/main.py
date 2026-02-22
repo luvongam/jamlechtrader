@@ -284,6 +284,44 @@ def multi(symbols: str, strategy: str, timeframe: str, duration: int) -> None:
         conn.disconnect()
 
 
+@cli.command(name="async-live")
+@click.option("--strategy", "-s", required=True, help="Strategy name")
+@click.option("--symbol", default=None, help="Trading symbol")
+@click.option("--timeframe", "-tf", default=None, help="Timeframe")
+def async_live(strategy: str, symbol: str | None, timeframe: str | None) -> None:
+    """Run async live trading engine (CAUTION: uses real money)."""
+    import asyncio
+
+    settings = get_settings()
+    sym = symbol or settings.default_symbol
+    tf = Timeframe(timeframe or settings.default_timeframe)
+
+    click.echo("WARNING: Async live trading uses REAL orders. Use a demo account.")
+    if not click.confirm("Continue?"):
+        return
+
+    strat = _load_strategy(strategy)
+
+    from jamlechtrader.engine.async_live import AsyncLiveEngine
+    from jamlechtrader.mt5.connection import MT5Connection
+
+    conn = MT5Connection(settings)
+    if not conn.connect():
+        click.echo("Failed to connect to MT5")
+        return
+
+    engine = AsyncLiveEngine(
+        connection=conn, strategy=strat, symbol=sym, timeframe=tf
+    )
+
+    try:
+        asyncio.run(engine.run())
+    except KeyboardInterrupt:
+        click.echo("Stopped by user")
+    finally:
+        conn.disconnect()
+
+
 @cli.command()
 def schedule() -> None:
     """Run trading bot on a schedule."""
@@ -320,6 +358,19 @@ def schedule() -> None:
     
     click.echo("Scheduler started. Trading at 09:00 and 14:00 daily.")
     scheduler.run()
+
+
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Dashboard host")
+@click.option("--port", default=8080, type=int, help="Dashboard port")
+def dashboard(host: str, port: int) -> None:
+    """Launch the monitoring dashboard."""
+    import uvicorn
+
+    from jamlechtrader.monitoring.dashboard import app
+
+    click.echo(f"Starting dashboard at http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
