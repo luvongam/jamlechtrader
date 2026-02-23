@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: jamlechtrader-test-db
+    environment:
+      POSTGRES_DB: jamlechtrader
+      POSTGRES_USER: jamlechtrader
+      POSTGRES_PASSWORD: jamlechtrader
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jamlechtrader"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  test-runner:
+    image: python:3.12-slim
+    container_name: jamlechtrader-test-runner
+    working_dir: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jamlechtrader:jamlechtrader@postgres:5432/jamlechtrader
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/workspace
+      - uv_cache:/root/.cache/uv
+      - venv_cache:/workspace/.venv
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      apt-get update &&
+      apt-get install -y --no-install-recommends curl gcc g++ &&
+      rm -rf /var/lib/apt/lists/* &&
+      curl -LsSf https://astral.sh/uv/install.sh | sh &&
+      export PATH="/root/.local/bin:$PATH" &&
+      uv sync --frozen --group dev &&
+      uv run alembic upgrade head &&
+      uv run ruff check . &&
+      uv run mypy jamlechtrader/ &&
+      uv run pytest tests/ -v
+    profiles:
+      - all
+      - ci-local
+
+  migrations:
+    image: python:3.12-slim
+    container_name: jamlechtrader-test-migrations
+    working_dir: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jamlechtrader:jamlechtrader@postgres:5432/jamlechtrader
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/workspace
+      - uv_cache:/root/.cache/uv
+      - venv_cache:/workspace/.venv
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      apt-get update &&
+      apt-get install -y --no-install-recommends curl gcc g++ &&
+      rm -rf /var/lib/apt/lists/* &&
+      curl -LsSf https://astral.sh/uv/install.sh | sh &&
+      export PATH="/root/.local/bin:$PATH" &&
+      uv sync --frozen --group dev &&
+      uv run alembic upgrade head
+    profiles:
+      - migration
+
+volumes:
+  uv_cache:
+  venv_cache:

@@ -8,13 +8,25 @@ from loguru import logger
 from jamlechtrader.core.enums import OrderSide, OrderType
 from jamlechtrader.core.models import Fill, Order, Position
 from jamlechtrader.mt5.utils import mt5_error_message, mt5_position_to_model, to_mt5_order_type
+from jamlechtrader.resilience.circuit_breaker import CircuitBreaker
+from jamlechtrader.resilience.retry import order_retry
+
+_executor_cb = CircuitBreaker(name="mt5_executor", failure_threshold=5, recovery_timeout=30.0)
 
 
 class MT5Executor:
-    """Wraps MT5 order operations with error handling."""
+    """Wraps MT5 order operations with error handling, retry, and circuit breaker."""
 
+    def __init__(self, circuit_breaker: CircuitBreaker | None = None) -> None:
+        self._cb = circuit_breaker or _executor_cb
+
+    @order_retry
     def send_order(self, order: Order) -> Fill | None:
         """Send an order to MT5 and return a Fill on success."""
+        if not self._cb.allow_request():
+            logger.error("Circuit breaker open — order rejected")
+            return None
+
         symbol_info = mt5.symbol_info(order.symbol)
         if symbol_info is None:
             logger.error(f"Symbol not found: {order.symbol}")
@@ -32,6 +44,7 @@ class MT5Executor:
             tick = mt5.symbol_info_tick(order.symbol)
             if tick is None:
                 logger.error(f"No tick available for {order.symbol}")
+                self._cb.record_failure()
                 return None
             price = tick.ask if order.side == OrderSide.BUY else tick.bid
         else:
@@ -58,13 +71,16 @@ class MT5Executor:
         result = mt5.order_send(request)
         if result is None:
             logger.error(f"order_send returned None: {mt5.last_error()}")
+            self._cb.record_failure()
             return None
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             msg = mt5_error_message(result.retcode)
             logger.error(f"Order rejected [{result.retcode}]: {msg}")
+            self._cb.record_failure()
             return None
 
+        self._cb.record_success()
         logger.info(
             f"Order filled: {order.symbol} {order.side.value} {order.quantity} @ {result.price}"
         )
@@ -77,14 +93,20 @@ class MT5Executor:
             price=result.price,
         )
 
+    @order_retry
     def close_position(self, position: Position) -> Fill | None:
         """Close an open position by ticket."""
+        if not self._cb.allow_request():
+            logger.error("Circuit breaker open — close rejected")
+            return None
+
         close_side = OrderSide.SELL if position.side == OrderSide.BUY else OrderSide.BUY
         mt5_type = mt5.ORDER_TYPE_SELL if position.side == OrderSide.BUY else mt5.ORDER_TYPE_BUY
 
         tick = mt5.symbol_info_tick(position.symbol)
         if tick is None:
             logger.error(f"No tick for {position.symbol}")
+            self._cb.record_failure()
             return None
 
         price = tick.bid if position.side == OrderSide.BUY else tick.ask
@@ -106,13 +128,16 @@ class MT5Executor:
         result = mt5.order_send(request)
         if result is None:
             logger.error(f"Close order_send returned None: {mt5.last_error()}")
+            self._cb.record_failure()
             return None
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             msg = mt5_error_message(result.retcode)
             logger.error(f"Close rejected [{result.retcode}]: {msg}")
+            self._cb.record_failure()
             return None
 
+        self._cb.record_success()
         logger.info(f"Position closed: {position.symbol} ticket={position.ticket}")
         return Fill(
             id=str(result.deal),

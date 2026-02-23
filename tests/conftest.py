@@ -68,3 +68,60 @@ def sample_position() -> Position:
         entry_price=1.0800,
         current_price=1.0850,
     )
+
+
+# --- Phase 7 additions ---
+
+@pytest.fixture
+def enhanced_mt5_mock():
+    """Provide a configurable MT5 mock server."""
+    from tests.mt5_mock_enhanced import MT5MockConfig, MT5MockServer
+
+    server = MT5MockServer()
+    server.install()
+    return server
+
+
+@pytest.fixture
+def enhanced_mt5_mock_with_failures():
+    """MT5 mock with 20% failure rate for chaos testing."""
+    from tests.mt5_mock_enhanced import MT5MockConfig, MT5MockServer
+
+    config = MT5MockConfig(failure_rate=0.2, latency_ms=(1, 10))
+    server = MT5MockServer(config)
+    server.install()
+    return server
+
+
+@pytest.fixture
+def portfolio():
+    """Fresh portfolio with 10k cash."""
+    from jamlechtrader.portfolio.portfolio import Portfolio
+    return Portfolio(initial_cash=10_000.0)
+
+
+@pytest.fixture
+def risk_manager():
+    """Default risk manager."""
+    from jamlechtrader.portfolio.risk import RiskManager
+    return RiskManager()
+
+
+@pytest.fixture
+def enterprise_risk_manager():
+    """Enterprise risk manager with tight limits for testing."""
+    from jamlechtrader.portfolio.enterprise_risk import EnterpriseRiskLimits, EnterpriseRiskManager
+    limits = EnterpriseRiskLimits(
+        max_open_positions=3,
+        max_daily_drawdown_pct=5.0,
+        per_symbol_max_position={"EURUSD": 1.0, "GBPUSD": 0.5},
+        kill_switch_consecutive_losses=5,
+    )
+    return EnterpriseRiskManager(limits=limits)
+
+
+@pytest.fixture
+def order_manager():
+    """Fresh order manager without executor."""
+    from jamlechtrader.oms.order_manager import OrderManager
+    return OrderManager()

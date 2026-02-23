@@ -49,6 +49,9 @@ data_cache/
 *.parquet
 *.h5
 *.hdf5
+.hypothesis
+.benchmarks
+.claude
 
 # Output
 output/

@@ -8,6 +8,8 @@ import MetaTrader5 as mt5
 from loguru import logger
 
 from jamlechtrader.config.settings import Settings
+from jamlechtrader.resilience.circuit_breaker import CircuitBreaker
+from jamlechtrader.resilience.retry import mt5_retry
 
 
 @dataclass
@@ -30,16 +32,23 @@ class MT5Connection:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._connected = False
+        self.circuit_breaker = CircuitBreaker(
+            name="mt5_connection",
+            failure_threshold=5,
+            recovery_timeout=30.0,
+        )
 
+    @mt5_retry
     def connect(self) -> bool:
-        """Initialize MT5 and log in."""
+        """Initialize MT5 and log in. Retries on failure."""
         kwargs = {}
         if self._settings.mt5_path:
             kwargs["path"] = self._settings.mt5_path
 
         if not mt5.initialize(**kwargs):
             logger.error(f"MT5 initialize failed: {mt5.last_error()}")
-            return False
+            self.circuit_breaker.record_failure()
+            raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
 
         if self._settings.mt5_login:
             authorized = mt5.login(
@@ -50,9 +59,11 @@ class MT5Connection:
             if not authorized:
                 logger.error(f"MT5 login failed: {mt5.last_error()}")
                 mt5.shutdown()
-                return False
+                self.circuit_breaker.record_failure()
+                raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
 
         self._connected = True
+        self.circuit_breaker.record_success()
         logger.info("MT5 connected successfully")
         return True
 
@@ -62,6 +73,15 @@ class MT5Connection:
             mt5.shutdown()
             self._connected = False
             logger.info("MT5 disconnected")
+
+    def reconnect(self) -> bool:
+        """Disconnect and reconnect to MT5."""
+        self.disconnect()
+        try:
+            return self.connect()
+        except Exception as e:
+            logger.error(f"Reconnect failed: {e}")
+            return False
 
     @property
     def is_connected(self) -> bool:

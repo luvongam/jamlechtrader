@@ -1,31 +1,53 @@
-# Dockerfile.windows
-# Windows Server Core with MT5 support
+# Multi-stage build for JamlechTrader
+FROM python:3.12-slim AS builder
 
-FROM mcr.microsoft.com/windows/servercore:ltsc2022
+WORKDIR /app
+ENV UV_LINK_MODE=copy
 
-# Install Python
-RUN powershell -Command \
-    Invoke-WebRequest -Uri https://www.python.org/ftp/python/3.13.0/python-3.13.0-amd64.exe -OutFile python-installer.exe; \
-    Start-Process python-installer.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1' -Wait; \
-    Remove-Item python-installer.exe
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install MetaTrader 5
-RUN powershell -Command \
-    Invoke-WebRequest -Uri https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -OutFile mt5setup.exe; \
-    Start-Process mt5setup.exe -ArgumentList '/auto' -Wait; \
-    Remove-Item mt5setup.exe
+# Copy dependency files
+COPY pyproject.toml ./
+COPY uv.lock ./
 
-# Set working directory
-WORKDIR C:\\app
+# Install uv and dependencies
+RUN pip install --no-cache-dir uv && \
+    uv sync --frozen --no-dev
 
-# Copy application
-COPY . .
+# Production stage
+FROM python:3.12-slim
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -e ".[mt5,reports,dev]"
+WORKDIR /app
 
-# Expose ports for API access
-EXPOSE 8000
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Run the bot
-CMD ["python", "main.py", "live", "-s", "advanced_smc"]
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy application code
+COPY jamlechtrader/ ./jamlechtrader/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+
+# Create data directory
+RUN mkdir -p /app/data_cache
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)"
+
+# Default command
+CMD ["jamlechtrader", "--help"]
