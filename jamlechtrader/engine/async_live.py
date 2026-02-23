@@ -45,6 +45,8 @@ class AsyncLiveEngine:
         sizer: PositionSizer | None = None,
         db_session: AsyncSession | None = None,
         audit_logger: AuditLogger | None = None,
+        mt5_data: MT5Data | None = None,
+        mt5_executor: MT5Executor | None = None,
     ) -> None:
         self.connection = connection
         self.strategy = strategy
@@ -56,7 +58,7 @@ class AsyncLiveEngine:
         self._db_session = db_session
         self._audit_logger = audit_logger
 
-        self._async_mt5 = AsyncMT5(connection, MT5Executor(), MT5Data())
+        self._async_mt5 = AsyncMT5(connection, mt5_executor or MT5Executor(), mt5_data or MT5Data())
         self._event_bus = AsyncEventBus()
         self._dead_letter_queue = DeadLetterQueue()
         self._running = False

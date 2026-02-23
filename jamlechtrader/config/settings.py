@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     mt5_login: int = 0
     mt5_password: str = ""
     mt5_server: str = ""
+    mt5_bridge_url: str = ""  # e.g. http://192.168.1.100:8000
 
     # Trading defaults
     default_symbol: str = "EURUSD"

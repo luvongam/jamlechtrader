@@ -1,5 +1,5 @@
 # Multi-stage build for JamlechTrader
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 ENV UV_LINK_MODE=copy

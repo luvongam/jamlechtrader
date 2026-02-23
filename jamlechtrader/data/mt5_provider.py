@@ -22,12 +22,13 @@ class MT5DataProvider(AbstractDataHandler):
         timeframe: Timeframe,
         start: datetime,
         end: datetime,
+        mt5_data: MT5Data | None = None,
     ) -> None:
         self.symbol = symbol
         self.timeframe = timeframe
         self.start = start
         self.end = end
-        self._mt5_data = MT5Data()
+        self._mt5_data = mt5_data or MT5Data()
         self._bars: list[Bar] = []
         self._index = 0
 

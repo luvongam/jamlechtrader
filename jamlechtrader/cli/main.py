@@ -56,6 +56,12 @@ def cli(verbose: bool) -> None:
 @click.option("--cash", default=10000.0, help="Initial cash")
 @click.option("--lot-size", default=None, type=float, help="Fixed lot size")
 @click.option("--tearsheet", is_flag=True, help="Generate HTML tearsheet")
+@click.option(
+    "--risk-mode",
+    type=click.Choice(["basic", "enterprise", "smart_money"]),
+    default="basic",
+    help="Risk manager mode",
+)
 def backtest(
     strategy: str,
     symbol: str | None,
@@ -65,6 +71,7 @@ def backtest(
     cash: float,
     lot_size: float | None,
     tearsheet: bool,
+    risk_mode: str,
 ) -> None:
     """Run a backtest on historical MT5 data."""
     settings = get_settings()
@@ -80,8 +87,15 @@ def backtest(
     from jamlechtrader.analytics.metrics import calculate_metrics, format_metrics
     from jamlechtrader.data.store import DataStore
     from jamlechtrader.engine.backtest import BacktestEngine
+    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
     from jamlechtrader.portfolio.portfolio import Portfolio
+    from jamlechtrader.portfolio.risk import create_risk_manager
     from jamlechtrader.portfolio.sizing import PositionSizer
+
+    risk_mgr = create_risk_manager(
+        enterprise=(risk_mode == "enterprise"),
+        smart_money=(risk_mode == "smart_money"),
+    )
 
     # Try cached data first, otherwise use MT5 provider
     store = DataStore(settings.data_dir)
@@ -91,14 +105,14 @@ def backtest(
         path = store._file_path(sym, tf)
         data_handler = CSVDataProvider(path, symbol=sym)
     else:
-        from jamlechtrader.mt5.connection import MT5Connection
         from jamlechtrader.data.mt5_provider import MT5DataProvider
 
-        conn = MT5Connection(settings)
+        conn = create_mt5_connection(settings)
         if not conn.connect():
             click.echo("Failed to connect to MT5. Run 'jamlechtrader download' first.")
             return
-        data_handler = MT5DataProvider(sym, tf, start_dt, end_dt)
+        mt5_data = create_mt5_data(settings)
+        data_handler = MT5DataProvider(sym, tf, start_dt, end_dt, mt5_data=mt5_data)
 
     portfolio = Portfolio(initial_cash=cash)
     sizer = PositionSizer(method="fixed", fixed_lot=lot)
@@ -129,7 +143,13 @@ def backtest(
 @click.option("--symbol", default=None, help="Trading symbol")
 @click.option("--timeframe", "-tf", default=None, help="Timeframe")
 @click.option("--duration", default=600, help="Duration in seconds (default 10min)")
-def paper(strategy: str, symbol: str | None, timeframe: str | None, duration: int) -> None:
+@click.option(
+    "--risk-mode",
+    type=click.Choice(["basic", "enterprise", "smart_money"]),
+    default="basic",
+    help="Risk manager mode",
+)
+def paper(strategy: str, symbol: str | None, timeframe: str | None, duration: int, risk_mode: str) -> None:
     """Run paper trading with live MT5 data."""
     settings = get_settings()
     sym = symbol or settings.default_symbol
@@ -138,15 +158,17 @@ def paper(strategy: str, symbol: str | None, timeframe: str | None, duration: in
     strat = _load_strategy(strategy)
 
     from jamlechtrader.engine.paper import PaperEngine
-    from jamlechtrader.mt5.connection import MT5Connection
+    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
 
-    conn = MT5Connection(settings)
+    conn = create_mt5_connection(settings)
     if not conn.connect():
         click.echo("Failed to connect to MT5")
         return
 
+    mt5_data = create_mt5_data(settings)
     engine = PaperEngine(
-        connection=conn, strategy=strat, symbol=sym, timeframe=tf
+        connection=conn, strategy=strat, symbol=sym, timeframe=tf,
+        mt5_data=mt5_data,
     )
 
     click.echo(f"Paper trading {sym} {tf.value} for {duration}s ...")
@@ -161,7 +183,13 @@ def paper(strategy: str, symbol: str | None, timeframe: str | None, duration: in
 @click.option("--strategy", "-s", required=True, help="Strategy name")
 @click.option("--symbol", default=None, help="Trading symbol")
 @click.option("--timeframe", "-tf", default=None, help="Timeframe")
-def live(strategy: str, symbol: str | None, timeframe: str | None) -> None:
+@click.option(
+    "--risk-mode",
+    type=click.Choice(["basic", "enterprise", "smart_money"]),
+    default="basic",
+    help="Risk manager mode",
+)
+def live(strategy: str, symbol: str | None, timeframe: str | None, risk_mode: str) -> None:
     """Run live trading (CAUTION: uses real money on live accounts)."""
     settings = get_settings()
     sym = symbol or settings.default_symbol
@@ -174,15 +202,17 @@ def live(strategy: str, symbol: str | None, timeframe: str | None) -> None:
     strat = _load_strategy(strategy)
 
     from jamlechtrader.engine.live import LiveEngine
-    from jamlechtrader.mt5.connection import MT5Connection
+    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
 
-    conn = MT5Connection(settings)
+    conn = create_mt5_connection(settings)
     if not conn.connect():
         click.echo("Failed to connect to MT5")
         return
 
+    mt5_data = create_mt5_data(settings)
     engine = LiveEngine(
-        connection=conn, strategy=strat, symbol=sym, timeframe=tf
+        connection=conn, strategy=strat, symbol=sym, timeframe=tf,
+        mt5_data=mt5_data,
     )
 
     try:
@@ -198,9 +228,9 @@ def account() -> None:
     """Show MT5 account information."""
     settings = get_settings()
 
-    from jamlechtrader.mt5.connection import MT5Connection
+    from jamlechtrader.mt5.factory import create_mt5_connection
 
-    conn = MT5Connection(settings)
+    conn = create_mt5_connection(settings)
     if not conn.connect():
         click.echo("Failed to connect to MT5")
         return
@@ -235,15 +265,16 @@ def download(symbol: str, timeframe: str, start: str, end: str | None) -> None:
     end_dt = datetime.strptime(end, "%Y-%m-%d") if end else datetime.now(tz=UTC)
 
     from jamlechtrader.data.store import DataStore
-    from jamlechtrader.mt5.connection import MT5Connection
+    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
 
-    conn = MT5Connection(settings)
+    conn = create_mt5_connection(settings)
     if not conn.connect():
         click.echo("Failed to connect to MT5")
         return
 
+    mt5_data = create_mt5_data(settings)
     store = DataStore(settings.data_dir)
-    df = store.download(symbol, tf, start_dt, end_dt)
+    df = store.download(symbol, tf, start_dt, end_dt, mt5_data=mt5_data)
     click.echo(f"Downloaded {len(df)} bars for {symbol} {tf.value}")
 
     conn.disconnect()
@@ -262,9 +293,9 @@ def multi(symbols: str, strategy: str, timeframe: str, duration: int) -> None:
     strat = _load_strategy(strategy)
 
     from jamlechtrader.engine.multi_symbol import MultiSymbolEngine
-    from jamlechtrader.mt5.connection import MT5Connection
+    from jamlechtrader.mt5.factory import create_mt5_connection
 
-    conn = MT5Connection(settings)
+    conn = create_mt5_connection(settings)
     if not conn.connect():
         click.echo("Failed to connect to MT5")
         return
@@ -303,15 +334,22 @@ def async_live(strategy: str, symbol: str | None, timeframe: str | None) -> None
     strat = _load_strategy(strategy)
 
     from jamlechtrader.engine.async_live import AsyncLiveEngine
-    from jamlechtrader.mt5.connection import MT5Connection
+    from jamlechtrader.mt5.factory import (
+        create_mt5_connection,
+        create_mt5_data,
+        create_mt5_executor,
+    )
 
-    conn = MT5Connection(settings)
+    conn = create_mt5_connection(settings)
     if not conn.connect():
         click.echo("Failed to connect to MT5")
         return
 
+    mt5_data = create_mt5_data(settings)
+    mt5_executor = create_mt5_executor(settings)
     engine = AsyncLiveEngine(
-        connection=conn, strategy=strat, symbol=sym, timeframe=tf
+        connection=conn, strategy=strat, symbol=sym, timeframe=tf,
+        mt5_data=mt5_data, mt5_executor=mt5_executor,
     )
 
     try:
@@ -327,17 +365,17 @@ def schedule() -> None:
     """Run trading bot on a schedule."""
     from datetime import time as dt_time
     from jamlechtrader.scheduler import TradingScheduler
-    from jamlechtrader.mt5.connection import MT5Connection
+    from jamlechtrader.mt5.factory import create_mt5_connection
     from jamlechtrader.engine.paper import PaperEngine
 
     settings = get_settings()
 
     def run_trading_session():
-        conn = MT5Connection(settings)
+        conn = create_mt5_connection(settings)
         if not conn.connect():
             logger.error("Failed to connect to MT5")
             return
-        
+
         strat = _load_strategy("sma_crossover")
         engine = PaperEngine(
             connection=conn,
@@ -345,7 +383,7 @@ def schedule() -> None:
             symbol=settings.default_symbol,
             timeframe=Timeframe(settings.default_timeframe),
         )
-        
+
         try:
             results = engine.run(duration_seconds=3600)
             logger.info(f"Session complete: {results['trades']} trades")
@@ -355,7 +393,7 @@ def schedule() -> None:
     scheduler = TradingScheduler()
     scheduler.add_daily_job(dt_time(9, 0), run_trading_session)
     scheduler.add_daily_job(dt_time(14, 0), run_trading_session)
-    
+
     click.echo("Scheduler started. Trading at 09:00 and 14:00 daily.")
     scheduler.run()
 

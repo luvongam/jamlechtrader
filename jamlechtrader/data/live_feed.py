@@ -20,11 +20,12 @@ class LiveFeed:
         symbol: str,
         event_bus: EventBus,
         poll_interval: float = 0.1,
+        mt5_data: MT5Data | None = None,
     ) -> None:
         self.symbol = symbol
         self.event_bus = event_bus
         self.poll_interval = poll_interval
-        self._mt5_data = MT5Data()
+        self._mt5_data = mt5_data or MT5Data()
         self._running = False
         self._last_tick_time: datetime | None = None
 

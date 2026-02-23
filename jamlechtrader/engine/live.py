@@ -42,6 +42,7 @@ class LiveEngine:
         sizer: PositionSizer | None = None,
         db_session: AsyncSession | None = None,
         audit_logger: AuditLogger | None = None,
+        mt5_data: MT5Data | None = None,
     ) -> None:
         self.connection = connection
         self.strategy = strategy
@@ -52,7 +53,7 @@ class LiveEngine:
         self.risk_manager = risk_manager or RiskManager()
         self.sizer = sizer or PositionSizer()
         self.event_bus = EventBus()
-        self._mt5_data = MT5Data()
+        self._mt5_data = mt5_data or MT5Data()
         self._running = False
         self._last_bar_time: datetime | None = None
 

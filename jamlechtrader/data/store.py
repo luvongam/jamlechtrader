@@ -29,9 +29,10 @@ class DataStore:
         timeframe: Timeframe,
         start: datetime,
         end: datetime,
+        mt5_data: MT5Data | None = None,
     ) -> pd.DataFrame:
         """Download bars from MT5 and save as Parquet."""
-        mt5_data = MT5Data()
+        mt5_data = mt5_data or MT5Data()
         bars = mt5_data.get_bars(symbol, timeframe, start, end)
         if not bars:
             logger.warning(f"No data downloaded for {symbol} {timeframe}")

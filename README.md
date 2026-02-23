@@ -459,46 +459,70 @@ Scrape `http://localhost:9090/metrics` (or the configured `PROMETHEUS_PORT`) wit
 
 ## Development
 
-### Running tests
+A `Makefile` provides shortcuts for common tasks. Run `make help` to see all targets.
+
+### First-time setup
 
 ```bash
-uv run pytest tests/ -v
+make install      # Install all dependencies
+make db-up        # Start PostgreSQL (Docker, port 5436)
+make db-migrate   # Run Alembic migrations
 ```
 
-### Code quality
+### Running checks
 
 ```bash
-uv run ruff check .
-```
-
-### Type checking
-
-```bash
-uv run mypy jamlechtrader/
+make lint         # ruff check .
+make typecheck    # mypy jamlechtrader/
+make test         # pytest tests/ -v
+make check        # All three at once
 ```
 
 ### Local Docker testing
 
-Run the full local quality/test pipeline (PostgreSQL + migrations + ruff + mypy + pytest):
+Run the full CI pipeline in Docker (PostgreSQL + migrations + ruff + mypy + pytest):
 
 ```bash
-docker compose -f docker-compose.test.yml --profile all up --build --abort-on-container-exit --exit-code-from test-runner
+make docker-test
 ```
 
 Run only DB migration validation:
 
 ```bash
-docker compose -f docker-compose.test.yml --profile migration up --build --abort-on-container-exit --exit-code-from migrations
+make docker-migration
+```
+
+### Monitoring stack
+
+Start the dashboard, Prometheus, and Grafana locally:
+
+```bash
+make docker-monitoring
+```
+
+| Service | URL | Credentials |
+|---|---|---|
+| Dashboard | http://localhost:8050 | None |
+| Prometheus | http://localhost:9090 | None |
+| Grafana | http://localhost:3000 | admin / admin |
+
+Stop everything:
+
+```bash
+make docker-down
 ```
 
 ## CI/CD Pipeline
 
-GitHub Actions workflows are included for automated quality checks, database migration validation, container publishing, and optional deployment.
+GitHub Actions workflows handle automated quality checks, database migration validation, container publishing, and deployment.
 
-- CI workflow: `.github/workflows/ci.yml`
-- CD workflow: `.github/workflows/cd.yml`
-- Dependency automation: `.github/dependabot.yml`
-- Pipeline runbook: `devops/PIPELINE.md`
+| Workflow | Trigger | File |
+|---|---|---|
+| CI | Push to main, PRs | `.github/workflows/ci.yml` |
+| CD | Push `v*` tag, manual dispatch | `.github/workflows/cd.yml` |
+| Dependabot | Weekly (Mondays) | `.github/dependabot.yml` |
+
+See the full pipeline runbook: [`devops/PIPELINE.md`](devops/PIPELINE.md)
 
 ## License
 

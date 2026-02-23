@@ -26,7 +26,13 @@ from jamlechtrader.db.models import (  # noqa: F401 — ensure models are regist
     PositionRow,
 )
 
+import os
+
 config = context.config
+
+# Allow DATABASE_URL env var to override alembic.ini (used in Docker / CI).
+if os.environ.get("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

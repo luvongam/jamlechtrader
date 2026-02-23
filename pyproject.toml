@@ -32,6 +32,8 @@ dependencies = [
     "websockets>=12.0",
     # Phase 4: Enterprise Risk
     "scipy>=1.11",
+    # Smart Money Concepts
+    "smartmoneyconcepts>=0.0.21",
     # Phase 6: Monitoring
     "prometheus-client>=0.20",
     "httpx>=0.27",

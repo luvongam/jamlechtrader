@@ -14,8 +14,8 @@ from jamlechtrader.mt5.executor import MT5Executor
 class MT5LiveExecutor(AbstractExecutionHandler):
     """Sends real orders to MetaTrader 5."""
 
-    def __init__(self) -> None:
-        self._executor = MT5Executor()
+    def __init__(self, executor: MT5Executor | None = None) -> None:
+        self._executor = executor or MT5Executor()
 
     def execute_order(self, order_event: OrderEvent) -> FillEvent | None:
         """Convert OrderEvent to Order model and send via MT5."""
