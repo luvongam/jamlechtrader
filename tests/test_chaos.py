@@ -19,7 +19,7 @@ from jamlechtrader.resilience.dead_letter_queue import DeadLetterQueue
 
 class TestRandomDisconnections:
     def test_circuit_breaker_under_random_failures(self):
-        """Simulate random MT5 disconnections and verify circuit breaker behavior."""
+        """Simulate random disconnections and verify circuit breaker behavior."""
         cb = CircuitBreaker(name="chaos", failure_threshold=5, recovery_timeout=0.1)
         failures = 0
         successes = 0

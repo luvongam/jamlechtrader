@@ -1,4 +1,4 @@
-"""Health check system for MT5 connection, database, and engine status."""
+"""Health check system for database and engine status."""
 
 from __future__ import annotations
 
@@ -47,16 +47,12 @@ class HealthCheckResult:
 
 
 class HealthChecker:
-    """Checks health of MT5 connection, database, and engine."""
+    """Checks health of database and engine."""
 
     def __init__(self) -> None:
         self._start_time = datetime.now(tz=UTC)
-        self._mt5_connected = False
         self._db_connected = False
         self._engine_running = False
-
-    def set_mt5_status(self, connected: bool) -> None:
-        self._mt5_connected = connected
 
     def set_db_status(self, connected: bool) -> None:
         self._db_connected = connected
@@ -66,14 +62,6 @@ class HealthChecker:
 
     def check(self) -> HealthCheckResult:
         components = []
-
-        # MT5
-        mt5_status = HealthStatus.HEALTHY if self._mt5_connected else HealthStatus.UNHEALTHY
-        components.append(ComponentHealth(
-            name="mt5",
-            status=mt5_status,
-            message="Connected" if self._mt5_connected else "Disconnected",
-        ))
 
         # Database
         db_status = HealthStatus.HEALTHY if self._db_connected else HealthStatus.DEGRADED

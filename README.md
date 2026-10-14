@@ -1,16 +1,17 @@
 # JamlechTrader
 
-Production-grade quantitative trading platform powered by MetaTrader 5.
+Production-grade quantitative trading platform.
 
 ## Features
 
-- **8 built-in strategies** — SMA crossover, mean reversion, momentum, trend following, scalping, breakout, Smart Money Concepts, and advanced SMC
-- **Multiple trading modes** — backtesting, paper trading, live trading, multi-symbol trading
+- **9 built-in strategies** — SMA crossover, mean reversion, momentum, trend following, scalping, breakout, Smart Money Concepts, advanced SMC, and supply/demand zones
+- **Yahoo Finance data** — free historical and live market data
+- **Multiple trading modes** — backtesting and paper trading with live Yahoo Finance data
 - **Enterprise risk management** — Value-at-Risk, kill switch, per-symbol limits, margin monitoring
 - **Order Management System** — state machine, bracket orders, partial fills
 - **Database persistence** — PostgreSQL with crash recovery and audit logging
 - **Monitoring dashboard** — REST API, WebSocket live feed, Prometheus metrics
-- **Resilience** — circuit breaker, auto-reconnect, graceful shutdown
+- **Resilience** — circuit breaker, graceful shutdown
 - **Credential encryption** — secure storage via OS keyring
 
 ## Installation
@@ -18,7 +19,6 @@ Production-grade quantitative trading platform powered by MetaTrader 5.
 ### Prerequisites
 
 - Python >= 3.10
-- MetaTrader 5 terminal (Windows only for live/paper trading)
 - PostgreSQL (for database persistence features)
 
 ### Install from source
@@ -38,14 +38,8 @@ pip install -e .
 ### Optional extras
 
 ```bash
-# MetaTrader 5 connector (Windows only)
-uv sync --extra mt5
-
 # HTML tearsheet reports (quantstats)
 uv sync --extra reports
-
-# Both
-uv sync --extra mt5 --extra reports
 ```
 
 ### Database setup
@@ -79,15 +73,6 @@ cp .env.example .env
 ```
 
 ### Environment variables
-
-#### MT5 Connection
-
-| Variable | Description | Default |
-|---|---|---|
-| `MT5_PATH` | Path to MetaTrader 5 terminal executable | `""` |
-| `MT5_LOGIN` | MT5 account login number | `0` |
-| `MT5_PASSWORD` | MT5 account password | `""` |
-| `MT5_SERVER` | MT5 broker server name | `""` |
 
 #### Trading Defaults
 
@@ -191,14 +176,15 @@ jamlechtrader backtest \
 | `--cash` | No | Initial cash (default `10000`) |
 | `--lot-size` | No | Fixed lot size (default from settings) |
 | `--tearsheet` | No | Generate HTML tearsheet report |
+| `--data-source` | No | Data source: `yahoo` (default) or `csv` |
 
-### `paper` — Paper trading with live data
+### `yahoo-live` — Paper trading with live Yahoo Finance data
 
 ```bash
-jamlechtrader paper \
+jamlechtrader yahoo-live \
   --strategy mean_reversion \
-  --symbol GBPUSD \
-  --timeframe M5 \
+  --symbol EURUSD \
+  --timeframe H1 \
   --duration 3600
 ```
 
@@ -207,53 +193,12 @@ jamlechtrader paper \
 | `--strategy`, `-s` | Yes | Strategy name |
 | `--symbol` | No | Trading symbol |
 | `--timeframe`, `-tf` | No | Timeframe |
-| `--duration` | No | Duration in seconds (default `600`) |
-
-### `live` — Live trading
-
-**Warning: This uses real money on live accounts. Use a demo account for testing.**
-
-```bash
-jamlechtrader live \
-  --strategy sma_crossover \
-  --symbol EURUSD \
-  --timeframe H1
-```
-
-| Option | Required | Description |
-|---|---|---|
-| `--strategy`, `-s` | Yes | Strategy name |
-| `--symbol` | No | Trading symbol |
-| `--timeframe`, `-tf` | No | Timeframe |
-
-### `async-live` — Async live trading engine
-
-The async engine provides non-blocking execution with improved throughput for high-frequency strategies.
-
-```bash
-jamlechtrader async-live \
-  --strategy scalping \
-  --symbol EURUSD \
-  --timeframe M1
-```
-
-| Option | Required | Description |
-|---|---|---|
-| `--strategy`, `-s` | Yes | Strategy name |
-| `--symbol` | No | Trading symbol |
-| `--timeframe`, `-tf` | No | Timeframe |
-
-### `account` — Show MT5 account info
-
-```bash
-jamlechtrader account
-```
-
-Displays login, server, name, company, balance, equity, margin, free margin, and leverage.
+| `--duration` | No | Duration in seconds (default `3600`) |
+| `--cash` | No | Initial cash (default `10000`) |
 
 ### `download` — Download historical data
 
-Downloads OHLCV data from MT5 and caches it as Parquet files for fast backtest loading.
+Downloads OHLCV data from Yahoo Finance and caches it as Parquet files for fast backtest loading.
 
 ```bash
 jamlechtrader download \
@@ -269,33 +214,6 @@ jamlechtrader download \
 | `--timeframe`, `-tf` | No | Timeframe (default `H1`) |
 | `--start` | Yes | Start date `YYYY-MM-DD` |
 | `--end` | No | End date `YYYY-MM-DD` (default: today) |
-
-### `multi` — Multi-symbol trading
-
-Trade multiple symbols simultaneously with a single strategy.
-
-```bash
-jamlechtrader multi \
-  --symbols EURUSD,GBPUSD,USDJPY \
-  --strategy momentum \
-  --timeframe M5 \
-  --duration 3600
-```
-
-| Option | Required | Description |
-|---|---|---|
-| `--symbols`, `-s` | Yes | Comma-separated symbols |
-| `--strategy` | Yes | Strategy name |
-| `--timeframe`, `-tf` | No | Timeframe (default `M5`) |
-| `--duration` | No | Duration in seconds (default `3600`) |
-
-### `schedule` — Scheduled trading sessions
-
-Runs paper trading sessions on a daily schedule. Currently hard-coded to run the `sma_crossover` strategy on the default symbol and timeframe at 09:00 and 14:00 daily (1-hour sessions each).
-
-```bash
-jamlechtrader schedule
-```
 
 ### `dashboard` — Monitoring dashboard
 
@@ -324,6 +242,7 @@ All built-in strategies can be referenced by name with the `--strategy` flag.
 | `breakout` | Trade breakouts above/below recent highs and lows | `lookback=20`, `threshold=0.001` |
 | `smart_money` | Institutional Smart Money Concepts (order blocks, bias detection) | `lookback=50`, `risk_threshold=60` |
 | `advanced_smc` | Professional SMC with BOS, CHoCH, order blocks, and fair value gaps | `swing_length=10`, `risk_threshold=60`, `min_risk_reward=2.0` |
+| `supply_demand` | Supply/demand zone strategy with SMC integration | |
 
 ### Custom strategies
 
@@ -361,37 +280,14 @@ jamlechtrader backtest -s sma_crossover --start 2023-01-01 --end 2024-12-31 --ca
 jamlechtrader backtest -s sma_crossover --start 2023-01-01 --end 2024-12-31 --tearsheet
 ```
 
-The backtest engine will use cached Parquet data if available, otherwise it connects to MT5 directly.
+The backtest engine will use cached Parquet data if available, otherwise it fetches from Yahoo Finance.
 
 ### Paper trading
 
-Paper trading uses live MT5 market data but simulates order execution. No real orders are placed.
+Paper trading uses live Yahoo Finance data with simulated order execution. No real orders are placed.
 
 ```bash
-jamlechtrader paper -s mean_reversion --symbol EURUSD --duration 3600
-```
-
-### Live trading
-
-Live trading places real orders through MT5. Always test your strategy thoroughly with backtesting and paper trading first.
-
-**Prerequisites:**
-- MetaTrader 5 terminal running and logged in
-- MT5 credentials configured in `.env`
-- Strategy validated via backtest and paper trading
-
-```bash
-jamlechtrader live -s sma_crossover --symbol EURUSD --timeframe H1
-```
-
-The command prompts for confirmation before starting. Press `Ctrl+C` to stop.
-
-### Multi-symbol trading
-
-Trade multiple symbols with a single strategy instance:
-
-```bash
-jamlechtrader multi --symbols EURUSD,GBPUSD,USDJPY --strategy momentum --duration 7200
+jamlechtrader yahoo-live -s mean_reversion --symbol EURUSD --duration 3600
 ```
 
 ## Enterprise Features
@@ -417,8 +313,7 @@ When `ENTERPRISE_RISK=true`, the following checks are enforced before every orde
 ### Resilience
 
 - **Circuit breaker** — automatically backs off after repeated failures
-- **Auto-reconnect** — reconnects to MT5 after connection drops
-- **Graceful shutdown** — cleanly closes positions and persists state on `SIGINT`/`SIGTERM`
+- **Graceful shutdown** — cleanly persists state on `SIGINT`/`SIGTERM`
 
 ### Audit logging
 
@@ -426,7 +321,7 @@ All order submissions, fills, cancellations, and risk rejections are logged to t
 
 ### Credential encryption
 
-Set `USE_SECURE_CREDENTIALS=true` to store MT5 credentials in the OS keyring instead of plain text in `.env`.
+Set `USE_SECURE_CREDENTIALS=true` to store credentials in the OS keyring instead of plain text in `.env`.
 
 ## Monitoring Dashboard
 

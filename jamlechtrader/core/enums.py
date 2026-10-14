@@ -4,7 +4,7 @@ from enum import Enum
 
 
 class Timeframe(str, Enum):
-    """MT5-aligned timeframes."""
+    """Standard trading timeframes."""
 
     M1 = "M1"
     M2 = "M2"

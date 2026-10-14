@@ -1,10 +1,5 @@
 """Shared test fixtures."""
 
-# Install MT5 mock before any jamlechtrader imports
-from tests.mt5_mock import install as _install_mt5_mock
-
-_install_mt5_mock()
-
 from datetime import datetime, timedelta
 
 import pytest
@@ -68,29 +63,6 @@ def sample_position() -> Position:
         entry_price=1.0800,
         current_price=1.0850,
     )
-
-
-# --- Phase 7 additions ---
-
-@pytest.fixture
-def enhanced_mt5_mock():
-    """Provide a configurable MT5 mock server."""
-    from tests.mt5_mock_enhanced import MT5MockConfig, MT5MockServer
-
-    server = MT5MockServer()
-    server.install()
-    return server
-
-
-@pytest.fixture
-def enhanced_mt5_mock_with_failures():
-    """MT5 mock with 20% failure rate for chaos testing."""
-    from tests.mt5_mock_enhanced import MT5MockConfig, MT5MockServer
-
-    config = MT5MockConfig(failure_rate=0.2, latency_ms=(1, 10))
-    server = MT5MockServer(config)
-    server.install()
-    return server
 
 
 @pytest.fixture

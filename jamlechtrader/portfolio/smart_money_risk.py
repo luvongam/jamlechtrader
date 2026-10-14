@@ -1,4 +1,13 @@
-"""Smart Money risk manager with SMC integration."""
+"""Smart Money risk manager with SMC integration.
+
+Implements institutional-grade risk management using:
+- Market structure analysis (BOS/CHoCH) for bias confirmation
+- Order block proximity for stop loss placement
+- Fair Value Gap mitigation awareness
+- Liquidity sweep detection for entry timing
+- Session-aware risk scaling
+- Multi-confluent position sizing
+"""
 
 from __future__ import annotations
 
@@ -12,15 +21,29 @@ from jamlechtrader.portfolio.risk import RiskLimits, RiskManager
 
 
 class SmartMoneyRiskManager(RiskManager):
-    """Risk manager enhanced with Smart Money Concepts."""
+    """Risk manager enhanced with Smart Money Concepts.
+
+    Provides institutional-style risk management by analyzing market
+    structure, order flow footprints, and liquidity conditions to
+    dynamically adjust position sizes and stop/target levels.
+    """
 
     def __init__(self, limits: RiskLimits | None = None, smc_lookback: int = SMC_DEFAULT_LOOKBACK) -> None:
         super().__init__(limits)
         self.smc_analyzer = SmartMoneyAnalyzer(lookback=smc_lookback)
         self._smc = SMCAnalyzer(swing_length=min(smc_lookback, 10))
+        self._consecutive_smc_rejects = 0
+        self._max_smc_rejects = 3  # Pause after 3 consecutive SMC-rejected trades
 
     def assess_trade_risk(self, df: pd.DataFrame, side: str, entry_price: float) -> dict[str, any]:
-        """Assess trade risk using SMC analysis with enriched data."""
+        """Assess trade risk using full SMC analysis.
+
+        Returns a comprehensive risk assessment including:
+        - Market structure alignment score
+        - Confluence count (OB + FVG + liquidity + BOS)
+        - Dynamic position size multiplier
+        - Optimal stop loss and take profit adjustments
+        """
         analysis = self.smc_analyzer.analyze(df)
 
         risk_assessment = {
@@ -34,22 +57,45 @@ class SmartMoneyRiskManager(RiskManager):
             "retracement_warning": False,
             "liquidity_swept": False,
             "ob_strength": 0.0,
+            "confluence_count": 0,
+            "market_structure": "neutral",
+            "session_risk_factor": 1.0,
         }
+
+        # Check if we should pause due to consecutive SMC rejections
+        if self._consecutive_smc_rejects >= self._max_smc_rejects:
+            risk_assessment["should_trade"] = False
+            risk_assessment["reason"] = f"Paused: {self._consecutive_smc_rejects} consecutive SMC rejections"
+            return risk_assessment
 
         if analysis.get("risk_score", 50) > 70:
             risk_assessment["should_trade"] = False
             risk_assessment["reason"] = "Risk score too high"
+            self._consecutive_smc_rejects += 1
             return risk_assessment
+
+        # Market structure analysis via BOS/CHoCH
+        market_structure = self._analyze_market_structure(df, side)
+        risk_assessment["market_structure"] = market_structure["direction"]
+        confluence = 0
+
+        if market_structure["aligned"]:
+            risk_assessment["position_size_multiplier"] *= 1.2
+            confluence += 1
+        elif market_structure["counter_trend"]:
+            risk_assessment["position_size_multiplier"] *= 0.4
+            risk_assessment["reason"] = "Counter-trend trade (CHoCH needed)"
 
         # Bias alignment
         if (side == "BUY" and analysis["bias"] == "bearish") or \
            (side == "SELL" and analysis["bias"] == "bullish"):
-            risk_assessment["position_size_multiplier"] = 0.5
+            risk_assessment["position_size_multiplier"] *= 0.5
             risk_assessment["reason"] = "Trading against bias"
         elif (side == "BUY" and analysis["bias"] == "bullish") or \
              (side == "SELL" and analysis["bias"] == "bearish"):
-            risk_assessment["position_size_multiplier"] = 1.5
+            risk_assessment["position_size_multiplier"] *= 1.3
             risk_assessment["reason"] = "Strong bias alignment"
+            confluence += 1
 
         # Deep retracement reduces position size
         retracement_pct = analysis.get("retracement_pct", 0.0)
@@ -57,6 +103,10 @@ class SmartMoneyRiskManager(RiskManager):
             risk_assessment["position_size_multiplier"] *= 0.5
             risk_assessment["retracement_warning"] = True
             risk_assessment["reason"] = "Deep retracement warning"
+        elif 50.0 < retracement_pct <= 78.6:
+            # Optimal retracement zone (OTE) — increase confidence
+            risk_assessment["position_size_multiplier"] *= 1.15
+            confluence += 1
 
         # Mitigated FVGs allow tighter stops
         mitigated_count = analysis.get("mitigated_fvg_count", 0)
@@ -66,17 +116,24 @@ class SmartMoneyRiskManager(RiskManager):
         else:
             risk_assessment["mitigation_status"] = "unmitigated"
 
+        # Unmitigated FVG confluence
+        unmitigated_fvg_aligned = self._check_fvg_confluence(df, side, entry_price)
+        if unmitigated_fvg_aligned:
+            confluence += 1
+
         # Swept liquidity increases confidence
         swept_count = analysis.get("swept_liquidity_count", 0)
         if swept_count > 0:
             risk_assessment["liquidity_swept"] = True
             risk_assessment["position_size_multiplier"] *= 1.2
+            confluence += 1
 
         # Strong OBs increase confidence
         ob_score = analysis.get("ob_volume_weighted_score", 0.0)
         risk_assessment["ob_strength"] = ob_score
         if ob_score > 50:
             risk_assessment["position_size_multiplier"] *= 1.3
+            confluence += 1
 
         # Entry zone proximity
         entry_zones = self.smc_analyzer.get_entry_zones(df)
@@ -101,7 +158,91 @@ class SmartMoneyRiskManager(RiskManager):
             risk_assessment["stop_loss_adjustment"] = 0.5
             risk_assessment["reason"] = "Nearby unswept liquidity zone"
 
+        # Confluence-based scaling
+        risk_assessment["confluence_count"] = confluence
+        if confluence >= 4:
+            risk_assessment["position_size_multiplier"] *= 1.3
+            risk_assessment["reason"] = f"High confluence ({confluence} factors)"
+        elif confluence <= 1:
+            risk_assessment["position_size_multiplier"] *= 0.6
+            risk_assessment["reason"] = f"Low confluence ({confluence} factors)"
+
+        # Cap the multiplier to prevent excessive sizing
+        risk_assessment["position_size_multiplier"] = min(
+            risk_assessment["position_size_multiplier"], 2.5
+        )
+
+        # Reset rejection counter on successful assessment
+        if risk_assessment["should_trade"]:
+            self._consecutive_smc_rejects = 0
+
         return risk_assessment
+
+    def _analyze_market_structure(self, df: pd.DataFrame, side: str) -> dict:
+        """Analyze market structure using BOS and CHoCH.
+
+        Returns dict with direction, aligned (bool), and counter_trend (bool).
+        """
+        result = {"direction": "neutral", "aligned": False, "counter_trend": False}
+
+        try:
+            bos_df = self._smc.bos_choch(df)
+            recent = bos_df.tail(10)
+
+            # Count recent bullish/bearish BOS
+            bullish_bos = (recent["BOS"] == 1).sum()
+            bearish_bos = (recent["BOS"] == -1).sum()
+
+            # CHoCH signals trend reversal
+            bullish_choch = (recent["CHOCH"] == 1).sum() if "CHOCH" in recent.columns else 0
+            bearish_choch = (recent["CHOCH"] == -1).sum() if "CHOCH" in recent.columns else 0
+
+            if bullish_bos > bearish_bos and bullish_choch == 0:
+                result["direction"] = "bullish"
+                result["aligned"] = side == "BUY"
+                result["counter_trend"] = side == "SELL"
+            elif bearish_bos > bullish_bos and bearish_choch == 0:
+                result["direction"] = "bearish"
+                result["aligned"] = side == "SELL"
+                result["counter_trend"] = side == "BUY"
+            elif bullish_choch > 0 and side == "BUY":
+                result["direction"] = "reversal_bullish"
+                result["aligned"] = True
+            elif bearish_choch > 0 and side == "SELL":
+                result["direction"] = "reversal_bearish"
+                result["aligned"] = True
+        except Exception:
+            pass
+
+        return result
+
+    def _check_fvg_confluence(self, df: pd.DataFrame, side: str, entry_price: float) -> bool:
+        """Check if an unmitigated FVG aligns with the trade direction."""
+        try:
+            fvg_df = self._smc.fair_value_gaps(df)
+            for idx in fvg_df.index:
+                fvg_val = fvg_df.at[idx, "FVG"]
+                if pd.isna(fvg_val):
+                    continue
+                mit_idx = fvg_df.at[idx, "MitigatedIndex"]
+                if not pd.isna(mit_idx):
+                    continue
+                top = fvg_df.at[idx, "Top"]
+                bottom = fvg_df.at[idx, "Bottom"]
+                if pd.isna(top) or pd.isna(bottom):
+                    continue
+
+                mid = (float(top) + float(bottom)) / 2
+                distance_pct = abs(entry_price - mid) / entry_price
+
+                # FVG within 2% of entry in the profit direction
+                if side == "BUY" and int(fvg_val) == 1 and distance_pct < 0.02:
+                    return True
+                if side == "SELL" and int(fvg_val) == -1 and distance_pct < 0.02:
+                    return True
+        except Exception:
+            pass
+        return False
 
     def check_fvg_mitigation(self, df: pd.DataFrame, side: str, entry_price: float) -> bool:
         """Check if entering against an unmitigated FVG.

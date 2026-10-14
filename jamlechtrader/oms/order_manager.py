@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from jamlechtrader.audit.logger import AuditLogger
     from jamlechtrader.core.events import FillEvent
     from jamlechtrader.core.models import PortfolioSnapshot
-    from jamlechtrader.mt5.executor import MT5Executor
+    from jamlechtrader.execution.base import AbstractExecutionHandler
     from jamlechtrader.portfolio.portfolio import Portfolio
     from jamlechtrader.portfolio.risk import RiskManager
 
@@ -32,7 +32,7 @@ class OrderManager:
 
     def __init__(
         self,
-        executor: MT5Executor | None = None,
+        executor: AbstractExecutionHandler | None = None,
         portfolio: Portfolio | None = None,
         risk_manager: RiskManager | None = None,
         audit_logger: AuditLogger | None = None,

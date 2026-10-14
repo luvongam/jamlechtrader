@@ -20,13 +20,6 @@ def _log_retry(retry_state: RetryCallState) -> None:
     )
 
 
-mt5_retry = retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1, min=1, max=30),
-    before_sleep=_log_retry,
-    reraise=True,
-)
-
 order_retry = retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=10),

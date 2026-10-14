@@ -151,51 +151,6 @@
       }
     },
     {
-      "title": "MT5 Connected",
-      "type": "stat",
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        {
-          "expr": "jamlechtrader_mt5_connected",
-          "legendFormat": "MT5"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
-            { "type": "value", "options": { "0": { "text": "DISCONNECTED", "color": "red" }, "1": { "text": "CONNECTED", "color": "green" } } }
-          ]
-        },
-        "overrides": []
-      }
-    },
-    {
-      "title": "MT5 Reconnects",
-      "type": "stat",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        {
-          "expr": "increase(jamlechtrader_mt5_reconnects_total[1h])",
-          "legendFormat": "Reconnects (1h)"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "value": null, "color": "green" },
-              { "value": 1, "color": "yellow" },
-              { "value": 5, "color": "red" }
-            ]
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
       "title": "Orders Submitted (rate/min)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },

@@ -1,22 +1,16 @@
-"""Integration tests for the live engine with resilience features."""
+"""Integration tests for resilience features."""
 
 from __future__ import annotations
 
-import threading
 import time
-from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jamlechtrader.core.enums import OrderSide, OrderStatus, Timeframe
-from jamlechtrader.core.events import FillEvent, MarketEvent, SignalEvent
-from jamlechtrader.core.models import Bar
+from jamlechtrader.core.enums import OrderSide
+from jamlechtrader.core.events import FillEvent
 from jamlechtrader.portfolio.portfolio import Portfolio
-from jamlechtrader.portfolio.risk import RiskManager
 from jamlechtrader.resilience.circuit_breaker import CircuitBreaker, CircuitBreakerOpen, CircuitState
 from jamlechtrader.resilience.dead_letter_queue import DeadLetterQueue
-from jamlechtrader.resilience.health_monitor import ConnectionHealthMonitor
 from jamlechtrader.resilience.shutdown import GracefulShutdown
 
 

@@ -19,10 +19,6 @@ ORDERS_FILLED = Counter(
 ORDERS_REJECTED = Counter(
     "jamlechtrader_orders_rejected_total", "Total orders rejected", ["symbol", "reason"]
 )
-MT5_RECONNECTS = Counter(
-    "jamlechtrader_mt5_reconnects_total", "Total MT5 reconnections"
-)
-
 # Gauges
 EQUITY = Gauge("jamlechtrader_equity", "Current portfolio equity")
 CASH = Gauge("jamlechtrader_cash", "Current cash balance")
@@ -33,8 +29,6 @@ DRAWDOWN_PCT = Gauge("jamlechtrader_drawdown_pct", "Current drawdown percentage"
 POSITION_QUANTITY = Gauge(
     "jamlechtrader_position_quantity", "Position quantity per symbol", ["symbol"]
 )
-MT5_CONNECTED = Gauge("jamlechtrader_mt5_connected", "MT5 connection status (1=connected)")
-
 # Histograms
 ORDER_LATENCY = Histogram(
     "jamlechtrader_order_latency_seconds",
@@ -81,8 +75,3 @@ class TradingMetrics:
     def record_rejection(self, symbol: str, reason: str = "unknown") -> None:
         ORDERS_REJECTED.labels(symbol=symbol, reason=reason).inc()
 
-    def set_mt5_connected(self, connected: bool) -> None:
-        MT5_CONNECTED.set(1 if connected else 0)
-
-    def record_reconnect(self) -> None:
-        MT5_RECONNECTS.inc()

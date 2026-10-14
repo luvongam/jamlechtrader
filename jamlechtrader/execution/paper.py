@@ -1,4 +1,4 @@
-"""Paper trading executor — virtual fills using live MT5 prices."""
+"""Paper trading executor — virtual fills using live prices."""
 
 from __future__ import annotations
 

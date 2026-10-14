@@ -20,7 +20,10 @@ STRATEGY_MAP = {
     "breakout": "jamlechtrader.strategy.examples.breakout:BreakoutStrategy",
     "smart_money": "jamlechtrader.strategy.examples.smart_money:SmartMoneyStrategy",
     "advanced_smc": "jamlechtrader.strategy.examples.advanced_smc:AdvancedSmartMoneyStrategy",
+    "supply_demand": "jamlechtrader.strategy.examples.supply_demand:SupplyDemandStrategy",
 }
+
+DATA_SOURCE_CHOICES = ["yahoo", "csv"]
 
 
 def _load_strategy(name: str):
@@ -49,8 +52,8 @@ def cli(verbose: bool) -> None:
 
 @cli.command()
 @click.option("--strategy", "-s", required=True, help="Strategy name or module:Class")
-@click.option("--symbol", default=None, help="Trading symbol (e.g. EURUSD)")
-@click.option("--timeframe", "-tf", default=None, help="Timeframe (e.g. H1, M5)")
+@click.option("--symbol", default=None, help="Trading symbol (e.g. EURUSD, AAPL, BTCUSD)")
+@click.option("--timeframe", "-tf", default=None, help="Timeframe (e.g. H1, M5, D1)")
 @click.option("--start", required=True, help="Start date YYYY-MM-DD")
 @click.option("--end", required=True, help="End date YYYY-MM-DD")
 @click.option("--cash", default=10000.0, help="Initial cash")
@@ -62,6 +65,12 @@ def cli(verbose: bool) -> None:
     default="basic",
     help="Risk manager mode",
 )
+@click.option(
+    "--data-source",
+    type=click.Choice(DATA_SOURCE_CHOICES),
+    default=None,
+    help="Data source: yahoo (default) or csv",
+)
 def backtest(
     strategy: str,
     symbol: str | None,
@@ -72,12 +81,14 @@ def backtest(
     lot_size: float | None,
     tearsheet: bool,
     risk_mode: str,
+    data_source: str | None,
 ) -> None:
-    """Run a backtest on historical MT5 data."""
+    """Run a backtest on historical data (Yahoo Finance by default)."""
     settings = get_settings()
     sym = symbol or settings.default_symbol
     tf = Timeframe(timeframe or settings.default_timeframe)
     lot = lot_size or settings.default_lot_size
+    source = data_source or settings.default_data_source
 
     start_dt = datetime.strptime(start, "%Y-%m-%d")
     end_dt = datetime.strptime(end, "%Y-%m-%d")
@@ -87,7 +98,6 @@ def backtest(
     from jamlechtrader.analytics.metrics import calculate_metrics, format_metrics
     from jamlechtrader.data.store import DataStore
     from jamlechtrader.engine.backtest import BacktestEngine
-    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
     from jamlechtrader.portfolio.portfolio import Portfolio
     from jamlechtrader.portfolio.risk import create_risk_manager
     from jamlechtrader.portfolio.sizing import PositionSizer
@@ -97,22 +107,22 @@ def backtest(
         smart_money=(risk_mode == "smart_money"),
     )
 
-    # Try cached data first, otherwise use MT5 provider
+    # Resolve data handler based on source
     store = DataStore(settings.data_dir)
     if store.has_cache(sym, tf):
         from jamlechtrader.data.csv_provider import CSVDataProvider
 
         path = store._file_path(sym, tf)
         data_handler = CSVDataProvider(path, symbol=sym)
-    else:
-        from jamlechtrader.data.mt5_provider import MT5DataProvider
+        click.echo(f"Using cached data from {path}")
+    elif source == "yahoo":
+        from jamlechtrader.data.yahoo_provider import YahooFinanceProvider
 
-        conn = create_mt5_connection(settings)
-        if not conn.connect():
-            click.echo("Failed to connect to MT5. Run 'jamlechtrader download' first.")
-            return
-        mt5_data = create_mt5_data(settings)
-        data_handler = MT5DataProvider(sym, tf, start_dt, end_dt, mt5_data=mt5_data)
+        data_handler = YahooFinanceProvider(sym, tf, start_dt, end_dt)
+        click.echo(f"Fetching data from Yahoo Finance for {sym}...")
+    else:
+        click.echo(f"No cached data for {sym} {tf.value}. Use --data-source yahoo.")
+        return
 
     portfolio = Portfolio(initial_cash=cash)
     sizer = PositionSizer(method="fixed", fixed_lot=lot)
@@ -121,6 +131,7 @@ def backtest(
         data_handler=data_handler,
         strategy=strat,
         portfolio=portfolio,
+        risk_manager=risk_mgr,
         sizer=sizer,
     )
 
@@ -139,263 +150,182 @@ def backtest(
 
 
 @cli.command()
-@click.option("--strategy", "-s", required=True, help="Strategy name")
-@click.option("--symbol", default=None, help="Trading symbol")
-@click.option("--timeframe", "-tf", default=None, help="Timeframe")
-@click.option("--duration", default=600, help="Duration in seconds (default 10min)")
-@click.option(
-    "--risk-mode",
-    type=click.Choice(["basic", "enterprise", "smart_money"]),
-    default="basic",
-    help="Risk manager mode",
-)
-def paper(strategy: str, symbol: str | None, timeframe: str | None, duration: int, risk_mode: str) -> None:
-    """Run paper trading with live MT5 data."""
-    settings = get_settings()
-    sym = symbol or settings.default_symbol
-    tf = Timeframe(timeframe or settings.default_timeframe)
-
-    strat = _load_strategy(strategy)
-
-    from jamlechtrader.engine.paper import PaperEngine
-    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
-
-    conn = create_mt5_connection(settings)
-    if not conn.connect():
-        click.echo("Failed to connect to MT5")
-        return
-
-    mt5_data = create_mt5_data(settings)
-    engine = PaperEngine(
-        connection=conn, strategy=strat, symbol=sym, timeframe=tf,
-        mt5_data=mt5_data,
-    )
-
-    click.echo(f"Paper trading {sym} {tf.value} for {duration}s ...")
-    try:
-        results = engine.run(duration_seconds=duration)
-        click.echo(f"Trades: {results['trades']}, Final equity: {results['final_equity']:.2f}")
-    finally:
-        conn.disconnect()
-
-
-@cli.command()
-@click.option("--strategy", "-s", required=True, help="Strategy name")
-@click.option("--symbol", default=None, help="Trading symbol")
-@click.option("--timeframe", "-tf", default=None, help="Timeframe")
-@click.option(
-    "--risk-mode",
-    type=click.Choice(["basic", "enterprise", "smart_money"]),
-    default="basic",
-    help="Risk manager mode",
-)
-def live(strategy: str, symbol: str | None, timeframe: str | None, risk_mode: str) -> None:
-    """Run live trading (CAUTION: uses real money on live accounts)."""
-    settings = get_settings()
-    sym = symbol or settings.default_symbol
-    tf = Timeframe(timeframe or settings.default_timeframe)
-
-    click.echo("WARNING: Live trading uses REAL orders. Use a demo account.")
-    if not click.confirm("Continue?"):
-        return
-
-    strat = _load_strategy(strategy)
-
-    from jamlechtrader.engine.live import LiveEngine
-    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
-
-    conn = create_mt5_connection(settings)
-    if not conn.connect():
-        click.echo("Failed to connect to MT5")
-        return
-
-    mt5_data = create_mt5_data(settings)
-    engine = LiveEngine(
-        connection=conn, strategy=strat, symbol=sym, timeframe=tf,
-        mt5_data=mt5_data,
-    )
-
-    try:
-        engine.run()
-    except KeyboardInterrupt:
-        click.echo("Stopped by user")
-    finally:
-        conn.disconnect()
-
-
-@cli.command()
-def account() -> None:
-    """Show MT5 account information."""
-    settings = get_settings()
-
-    from jamlechtrader.mt5.factory import create_mt5_connection
-
-    conn = create_mt5_connection(settings)
-    if not conn.connect():
-        click.echo("Failed to connect to MT5")
-        return
-
-    info = conn.account_info()
-    if info:
-        click.echo(f"Login:       {info.login}")
-        click.echo(f"Server:      {info.server}")
-        click.echo(f"Name:        {info.name}")
-        click.echo(f"Company:     {info.company}")
-        click.echo(f"Balance:     {info.balance:.2f} {info.currency}")
-        click.echo(f"Equity:      {info.equity:.2f} {info.currency}")
-        click.echo(f"Margin:      {info.margin:.2f} {info.currency}")
-        click.echo(f"Free margin: {info.free_margin:.2f} {info.currency}")
-        click.echo(f"Leverage:    1:{info.leverage}")
-    else:
-        click.echo("Failed to retrieve account info")
-
-    conn.disconnect()
-
-
-@cli.command()
 @click.option("--symbol", required=True, help="Symbol to download")
 @click.option("--timeframe", "-tf", default="H1", help="Timeframe")
 @click.option("--start", required=True, help="Start date YYYY-MM-DD")
 @click.option("--end", default=None, help="End date YYYY-MM-DD (default: today)")
 def download(symbol: str, timeframe: str, start: str, end: str | None) -> None:
-    """Download historical data from MT5 and cache as Parquet."""
+    """Download historical data from Yahoo Finance and cache as Parquet."""
     settings = get_settings()
     tf = Timeframe(timeframe)
     start_dt = datetime.strptime(start, "%Y-%m-%d")
     end_dt = datetime.strptime(end, "%Y-%m-%d") if end else datetime.now(tz=UTC)
 
     from jamlechtrader.data.store import DataStore
-    from jamlechtrader.mt5.factory import create_mt5_connection, create_mt5_data
 
-    conn = create_mt5_connection(settings)
-    if not conn.connect():
-        click.echo("Failed to connect to MT5")
-        return
-
-    mt5_data = create_mt5_data(settings)
     store = DataStore(settings.data_dir)
-    df = store.download(symbol, tf, start_dt, end_dt, mt5_data=mt5_data)
-    click.echo(f"Downloaded {len(df)} bars for {symbol} {tf.value}")
-
-    conn.disconnect()
+    df = store.download(symbol, tf, start_dt, end_dt)
+    click.echo(f"Downloaded {len(df)} bars for {symbol} {tf.value} from Yahoo Finance")
 
 
-@cli.command()
-@click.option("--symbols", "-s", required=True, help="Comma-separated symbols (e.g. EURUSD,GBPUSD)")
-@click.option("--strategy", required=True, help="Strategy name")
-@click.option("--timeframe", "-tf", default="M5", help="Timeframe")
-@click.option("--duration", default=3600, help="Duration in seconds")
-def multi(symbols: str, strategy: str, timeframe: str, duration: int) -> None:
-    """Trade multiple symbols simultaneously."""
-    settings = get_settings()
-    symbol_list = [s.strip() for s in symbols.split(",")]
-    tf = Timeframe(timeframe)
-    strat = _load_strategy(strategy)
-
-    from jamlechtrader.engine.multi_symbol import MultiSymbolEngine
-    from jamlechtrader.mt5.factory import create_mt5_connection
-
-    conn = create_mt5_connection(settings)
-    if not conn.connect():
-        click.echo("Failed to connect to MT5")
-        return
-
-    engine = MultiSymbolEngine(
-        connection=conn,
-        symbols=symbol_list,
-        strategies={"main": strat},
-        timeframe=tf,
-    )
-
-    click.echo(f"Multi-symbol trading: {symbol_list}")
-    try:
-        results = engine.run(duration_seconds=duration)
-        click.echo(f"Completed: {results['trades']} trades, Final equity: {results['final_equity']:.2f}")
-    finally:
-        conn.disconnect()
-
-
-@cli.command(name="async-live")
+@cli.command(name="yahoo-live")
 @click.option("--strategy", "-s", required=True, help="Strategy name")
-@click.option("--symbol", default=None, help="Trading symbol")
+@click.option("--symbol", default=None, help="Trading symbol (e.g. EURUSD, AAPL, BTCUSD)")
 @click.option("--timeframe", "-tf", default=None, help="Timeframe")
-def async_live(strategy: str, symbol: str | None, timeframe: str | None) -> None:
-    """Run async live trading engine (CAUTION: uses real money)."""
-    import asyncio
+@click.option("--duration", default=3600, help="Duration in seconds (default 1hr)")
+@click.option("--cash", default=10000.0, help="Initial cash")
+@click.option(
+    "--risk-mode",
+    type=click.Choice(["basic", "enterprise", "smart_money"]),
+    default="basic",
+    help="Risk manager mode",
+)
+def yahoo_live(
+    strategy: str,
+    symbol: str | None,
+    timeframe: str | None,
+    duration: int,
+    cash: float,
+    risk_mode: str,
+) -> None:
+    """Run paper trading with Yahoo Finance live data."""
+    import time as time_mod
 
     settings = get_settings()
     sym = symbol or settings.default_symbol
     tf = Timeframe(timeframe or settings.default_timeframe)
 
-    click.echo("WARNING: Async live trading uses REAL orders. Use a demo account.")
-    if not click.confirm("Continue?"):
-        return
-
     strat = _load_strategy(strategy)
 
-    from jamlechtrader.engine.async_live import AsyncLiveEngine
-    from jamlechtrader.mt5.factory import (
-        create_mt5_connection,
-        create_mt5_data,
-        create_mt5_executor,
-    )
+    from jamlechtrader.core.events import EventBus, MarketEvent
+    from jamlechtrader.data.yahoo_provider import YahooLiveFeed
+    from jamlechtrader.execution.simulated import SimulatedExecutor
+    from jamlechtrader.portfolio.portfolio import Portfolio
+    from jamlechtrader.portfolio.risk import create_risk_manager
+    from jamlechtrader.portfolio.sizing import PositionSizer
 
-    conn = create_mt5_connection(settings)
-    if not conn.connect():
-        click.echo("Failed to connect to MT5")
-        return
-
-    mt5_data = create_mt5_data(settings)
-    mt5_executor = create_mt5_executor(settings)
-    engine = AsyncLiveEngine(
-        connection=conn, strategy=strat, symbol=sym, timeframe=tf,
-        mt5_data=mt5_data, mt5_executor=mt5_executor,
+    risk_mgr = create_risk_manager(
+        enterprise=(risk_mode == "enterprise"),
+        smart_money=(risk_mode == "smart_money"),
     )
+    portfolio = Portfolio(initial_cash=cash)
+    sizer = PositionSizer(method="fixed", fixed_lot=settings.default_lot_size)
+    executor = SimulatedExecutor()
+
+    feed = YahooLiveFeed(symbol=sym, timeframe=tf, poll_interval=10.0)
+
+    click.echo(f"Yahoo Finance paper trading: {sym} {tf.value} for {duration}s")
+    click.echo("Press Ctrl+C to stop early")
+
+    strat.on_start()
+    start_time = time_mod.time()
+    signal_count = 0
+    fill_count = 0
 
     try:
-        asyncio.run(engine.run())
+        while time_mod.time() - start_time < duration:
+            bar = feed.get_latest_bar()
+            if bar is None:
+                time_mod.sleep(10)
+                continue
+
+            portfolio.update_market_price(bar.symbol, bar.close)
+            executor.set_current_bar(bar)
+
+            event = MarketEvent(symbol=bar.symbol, timestamp=bar.timestamp, data=bar)
+            signals = strat.on_bar(event)
+
+            for signal in signals:
+                signal_count += 1
+                quantity = sizer.calculate(equity=portfolio.equity, bar=bar)
+                order = portfolio.generate_order(signal, quantity)
+                if order is None:
+                    continue
+                snapshot = portfolio.take_snapshot(bar.timestamp)
+                checked = risk_mgr.check_order(order, snapshot)
+                if checked is None:
+                    continue
+                fill = executor.execute_order(checked)
+                if fill is not None:
+                    fill_count += 1
+                    portfolio.on_fill(fill)
+                    click.echo(
+                        f"  [{fill.side.value}] {fill.symbol} @ {fill.price:.5f} "
+                        f"qty={fill.quantity} | equity={portfolio.equity:.2f}"
+                    )
+
+            portfolio.take_snapshot(bar.timestamp)
+            time_mod.sleep(10)
+
     except KeyboardInterrupt:
-        click.echo("Stopped by user")
-    finally:
-        conn.disconnect()
+        click.echo("\nStopped by user")
+
+    strat.on_stop()
+    click.echo(f"\nResults: {signal_count} signals, {fill_count} fills")
+    click.echo(f"Final equity: {portfolio.equity:.2f}")
 
 
 @cli.command()
-def schedule() -> None:
-    """Run trading bot on a schedule."""
-    from datetime import time as dt_time
-    from jamlechtrader.scheduler import TradingScheduler
-    from jamlechtrader.mt5.factory import create_mt5_connection
-    from jamlechtrader.engine.paper import PaperEngine
+@click.option("--symbols", "-s", required=True, help="Comma-separated symbols (e.g. AAPL,EURUSD,BTCUSD)")
+@click.option("--duration", default=0, help="Duration in seconds (0 = indefinite)")
+def stream(symbols: str, duration: int) -> None:
+    """Stream real-time ticks via Yahoo Finance WebSocket."""
+    import time as time_mod
 
-    settings = get_settings()
+    from jamlechtrader.data.yahoo_provider import YahooWebSocketFeed
 
-    def run_trading_session():
-        conn = create_mt5_connection(settings)
-        if not conn.connect():
-            logger.error("Failed to connect to MT5")
-            return
+    symbol_list = [s.strip() for s in symbols.split(",")]
+    tick_count = 0
 
-        strat = _load_strategy("sma_crossover")
-        engine = PaperEngine(
-            connection=conn,
-            strategy=strat,
-            symbol=settings.default_symbol,
-            timeframe=Timeframe(settings.default_timeframe),
+    def on_tick(tick):
+        nonlocal tick_count
+        tick_count += 1
+        click.echo(
+            f"  {tick.symbol:>10} | bid={tick.bid:.5f}  ask={tick.ask:.5f}  "
+            f"last={tick.last:.5f}  vol={tick.volume:.0f}"
         )
 
-        try:
-            results = engine.run(duration_seconds=3600)
-            logger.info(f"Session complete: {results['trades']} trades")
-        finally:
-            conn.disconnect()
+    feed = YahooWebSocketFeed(symbol_list, on_tick=on_tick)
 
-    scheduler = TradingScheduler()
-    scheduler.add_daily_job(dt_time(9, 0), run_trading_session)
-    scheduler.add_daily_job(dt_time(14, 0), run_trading_session)
+    click.echo(f"Streaming real-time ticks for: {symbol_list}")
+    click.echo("Press Ctrl+C to stop\n")
 
-    click.echo("Scheduler started. Trading at 09:00 and 14:00 daily.")
-    scheduler.run()
+    feed.start_background()
+
+    try:
+        start_time = time_mod.time()
+        while feed.is_running:
+            if duration > 0 and (time_mod.time() - start_time) > duration:
+                break
+            time_mod.sleep(1)
+    except KeyboardInterrupt:
+        click.echo("\nStopped by user")
+    finally:
+        feed.stop()
+        click.echo(f"Total ticks received: {tick_count}")
+
+
+@cli.command(name="snapshot")
+@click.option("--symbol", "-s", default=None, help="Trading symbol")
+def snapshot(symbol: str | None) -> None:
+    """Get a quick price snapshot via Yahoo Finance fast_info."""
+    settings = get_settings()
+    sym = symbol or settings.default_symbol
+
+    from jamlechtrader.data.yahoo_provider import YahooLiveFeed
+
+    feed = YahooLiveFeed(sym)
+    tick = feed.get_snapshot_tick()
+    if tick is None:
+        click.echo(f"Failed to get snapshot for {sym}")
+        return
+
+    click.echo(f"Symbol:    {tick.symbol}")
+    click.echo(f"Bid:       {tick.bid:.6f}")
+    click.echo(f"Ask:       {tick.ask:.6f}")
+    click.echo(f"Last:      {tick.last:.6f}")
+    click.echo(f"Volume:    {tick.volume:.0f}")
+    click.echo(f"Timestamp: {tick.timestamp.isoformat()}")
 
 
 @cli.command()

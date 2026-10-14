@@ -1,4 +1,4 @@
-"""Parquet data cache — download once from MT5, backtest many times."""
+"""Parquet data cache — download once, backtest many times."""
 
 from __future__ import annotations
 
@@ -10,11 +10,10 @@ from loguru import logger
 
 from jamlechtrader.core.enums import Timeframe
 from jamlechtrader.core.models import Bar
-from jamlechtrader.mt5.data import MT5Data
 
 
 class DataStore:
-    """Cache MT5 data as Parquet files for fast reloading."""
+    """Cache market data as Parquet files for fast reloading."""
 
     def __init__(self, base_dir: str | Path = "./data_cache") -> None:
         self.base_dir = Path(base_dir)
@@ -29,13 +28,16 @@ class DataStore:
         timeframe: Timeframe,
         start: datetime,
         end: datetime,
-        mt5_data: MT5Data | None = None,
     ) -> pd.DataFrame:
-        """Download bars from MT5 and save as Parquet."""
-        mt5_data = mt5_data or MT5Data()
-        bars = mt5_data.get_bars(symbol, timeframe, start, end)
+        """Download bars from Yahoo Finance and save as Parquet."""
+        from jamlechtrader.data.yahoo_provider import YahooFinanceProvider
+
+        provider = YahooFinanceProvider(symbol, timeframe, start, end)
+        provider.load()
+        bars = provider.get_all_bars()
+
         if not bars:
-            logger.warning(f"No data downloaded for {symbol} {timeframe}")
+            logger.warning(f"No data downloaded for {symbol} {timeframe} from Yahoo Finance")
             return pd.DataFrame()
 
         df = pd.DataFrame([b.model_dump() for b in bars])

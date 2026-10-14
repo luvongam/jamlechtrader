@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from jamlechtrader.mt5.executor import MT5Executor
+    from jamlechtrader.execution.base import AbstractExecutionHandler
     from jamlechtrader.core.models import Position
 
 
@@ -19,7 +19,7 @@ class KillSwitch:
     Once triggered, requires an authorization code to reset.
     """
 
-    def __init__(self, executor: MT5Executor | None = None) -> None:
+    def __init__(self, executor: AbstractExecutionHandler | None = None) -> None:
         self._executor = executor
         self._triggered = False
         self._trigger_time: datetime | None = None

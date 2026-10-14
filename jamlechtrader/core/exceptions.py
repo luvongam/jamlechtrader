@@ -10,7 +10,7 @@ class ConfigurationError(JamlechTraderError):
 
 
 class ConnectionError(JamlechTraderError):
-    """MT5 or broker connection error."""
+    """Broker connection error."""
 
 
 class DataError(JamlechTraderError):

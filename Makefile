@@ -69,7 +69,7 @@ docker-backtest: ## Run a backtest in Docker
 	docker compose --profile backtest down
 
 docker-down: ## Stop all Docker services and remove volumes
-	docker compose --profile monitoring --profile backtest --profile paper down -v
+	docker compose --profile monitoring --profile backtest down -v
 	docker compose -f docker-compose.test.yml --profile all --profile migration down -v
 
 # ── Cleanup ────────────────────────────────────────────────────────

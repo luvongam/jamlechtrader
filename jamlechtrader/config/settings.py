@@ -8,17 +8,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
-    # MT5 connection
-    mt5_path: str = ""
-    mt5_login: int = 0
-    mt5_password: str = ""
-    mt5_server: str = ""
-    mt5_bridge_url: str = ""  # e.g. http://192.168.1.100:8000
-
     # Trading defaults
     default_symbol: str = "EURUSD"
     default_timeframe: str = "H1"
     default_lot_size: float = 0.01
+    default_data_source: str = "yahoo"  # "yahoo" or "csv"
 
     # Data storage
     data_dir: Path = Path("./data_cache")

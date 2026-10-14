@@ -1,4 +1,4 @@
-"""Tests for strategies using sample bar data (no MT5 required)."""
+"""Tests for strategies using sample bar data."""
 
 from datetime import datetime
 
